@@ -1,0 +1,78 @@
+import type { ProviderConfig } from '../provider/factory.js';
+import { createProvider } from '../provider/factory.js';
+
+export interface Seat {
+  config: ProviderConfig;
+  role: string;          // display name e.g. "CEO"
+  system: string;        // role-specific system prompt
+}
+
+export interface PanelistAnswer {
+  panelist: string;      // vendor name
+  role: string;          // role name
+  model: string;
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  error?: string;
+}
+
+export async function askPanel(
+  seats: Seat[],
+  question: string,
+  maxTokens = 2048,
+): Promise<PanelistAnswer[]> {
+  return Promise.all(seats.map(seat => askOne(seat, question, maxTokens)));
+}
+
+async function askOne(seat: Seat, question: string, maxTokens: number): Promise<PanelistAnswer> {
+  const start = Date.now();
+  let text = '';
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  try {
+    const provider = createProvider(seat.config);
+    const stream = provider.createMessage({
+      system: seat.system,
+      messages: [{ role: 'user', content: question }],
+      tools: [],
+      maxTokens,
+      model: seat.config.model,
+    });
+
+    for await (const ev of stream) {
+      if (ev.type === 'message_start') {
+        inputTokens = ev.message.usage.input_tokens;
+      } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+        text += ev.delta.text;
+      } else if (ev.type === 'message_delta') {
+        outputTokens = ev.usage.output_tokens;
+      } else if (ev.type === 'error') {
+        throw new Error(ev.error.message);
+      }
+    }
+
+    return {
+      panelist: seat.config.name,
+      role: seat.role,
+      model: seat.config.model,
+      text: text.trim(),
+      inputTokens,
+      outputTokens,
+      durationMs: Date.now() - start,
+    };
+  } catch (e: any) {
+    return {
+      panelist: seat.config.name,
+      role: seat.role,
+      model: seat.config.model,
+      text: '',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: Date.now() - start,
+      error: e?.message || String(e),
+    };
+  }
+}

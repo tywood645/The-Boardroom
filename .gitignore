@@ -1,0 +1,26 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+
+# Environment / secrets, never commit these
+.env
+.env.local
+.env.*.local
+
+# IDE / OS noise
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Local data, board context, meetings, decisions
+# (boardroom writes to ~/.boardroom/, NOT to the repo, so this is just a guard)
+data/
+.cache/
+coverage/

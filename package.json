@@ -1,0 +1,29 @@
+{
+  "name": "boardroom",
+  "version": "0.1.0",
+  "description": "BoardRoom - Multi-vendor LLM advisory panel for solo founders",
+  "type": "module",
+  "bin": {
+    "boardroom": "./dist/bin/boardroom.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/bin/boardroom.js",
+    "test": "node --import tsx/esm --test tests/*.test.ts"
+  },
+  "author": "Tyler Wood (https://github.com/tywood645)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "commander": "^11.1.0",
+    "dotenv": "^17.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.0"
+  }
+}
