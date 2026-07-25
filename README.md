@@ -182,7 +182,7 @@ Default response budgets are 1024 tokens per panelist in `ask` mode and 600 toke
 
 A sibling of the board, not a layer under it. The board seats one vendor per role to *manufacture disagreement*; the delegator picks one model per task to *minimise cost*. Opposite objectives, so `roles.ts` is untouched and this is a separate command.
 
-Most work sent to a frontier model does not need one. The problem is knowing which work, and being able to prove it afterwards. Four things make that possible here.
+Most work sent to a frontier model does not need one. The problem is knowing which work, and being able to prove it afterwards. Four things make that possible here. (For what prompted this and what it owes to [pilotfish](https://github.com/Nanako0129/pilotfish), see [Prior art](#prior-art).)
 
 **Tiers are price bands, not model aliases.** A tier resolves at runtime against whichever vendors you have credentialed, ranked by the same catalog that prices the budget gate, so the delegator can never select a model it cannot price:
 
@@ -256,6 +256,16 @@ These are directions the architecture already invites, not commitments:
 - Richer minutes: per-advisor token and cost breakdown inside the meeting file.
 - A `history` command to browse and cite past decisions from the CLI.
 - Tool-use is modeled in the provider types but unused by the protocols; advisor-side research tools are a natural extension.
+
+---
+
+## Prior art
+
+`boardroom delegate` was prompted by [pilotfish](https://github.com/Nanako0129/pilotfish) by [@Nanako0129](https://github.com/Nanako0129) (MIT), a configuration layer that routes Claude Code's work across Anthropic model tiers. It framed the problem clearly, and three ideas here follow its lead: a three-tier hierarchy, an adversarial checker that returns a `CONFIRMED`/`REFUTED` verdict, and a hard cap on how many times work may be escalated.
+
+The implementation is independent. No pilotfish code is used — it is Python and markdown templates written into `~/.claude/`, this is TypeScript that dispatches calls at runtime, and nothing was copied between them. The approach diverges accordingly: pilotfish states its orchestration policy as prose for a model to follow, while this enforces limits in code at a single choke point; its tiers are Anthropic aliases, while these are price bands resolved across whichever vendors you have credentialed; its verifier runs on the frontier tier, while this one runs same-tier on a different vendor. pilotfish's own design doc lists enforcement hooks and a telemetry feedback loop among the things it deliberately excludes, and those two exclusions are most of what this adds.
+
+Credit where it is due in both directions: the claim that independent fresh-context verification beats self-critique is one pilotfish cites from Anthropic's documentation, and originates with neither project.
 
 ---
 
