@@ -26,9 +26,9 @@ describe('cross-vendor tier resolution', () => {
     }
   });
 
-  // The point of the exercise: a tier is a price band, not an Anthropic alias.
+  // The point of the exercise: a tier is a price band, not a model alias.
   // With Google credentialed, cheap is gemini-flash at $0.10/$0.40 rather than
-  // haiku at $0.80/$4.00 — an 8x difference pilotfish cannot express.
+  // haiku at $0.80/$4.00 — an 8x difference on identical work.
   it('picks the cheapest credentialed vendor for a tier, across vendors', () => {
     const configs = [cfg('anthropic', 'claude-sonnet-4-20250514'), cfg('google', 'gemini-2.0-flash')];
     const r = resolveTier('cheap', configs);

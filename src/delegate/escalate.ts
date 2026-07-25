@@ -13,13 +13,13 @@ import { VERIFY_SYSTEM, buildVerifyPrompt, parseVerdict, type Verdict } from './
 /**
  * Cheap-first escalation.
  *
- * pilotfish maps each role to a fixed tier and verifies on Opus regardless of
- * whether the cheap attempt was fine. Here the cheap tier is attempted first,
- * a same-tier different-vendor checker tries to refute it, and only a named
- * defect buys a more expensive attempt.
+ * The cheap tier is attempted first, a same-tier different-vendor checker
+ * tries to refute it, and only a concretely named defect buys a more expensive
+ * attempt. Spending the expensive tier up front, or verifying on it by
+ * default, pays for capability most tasks never needed.
  */
 
-/** cheap → mid → frontier and stop. Matches pilotfish's cap of two REVISE verdicts. */
+/** cheap → mid → frontier and stop. Past two escalations, more spend stops buying quality. */
 export const MAX_ESCALATIONS = 2;
 /** Belt and braces, independent of the ladder. */
 export const MAX_ATTEMPTS = 4;

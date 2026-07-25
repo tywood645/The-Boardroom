@@ -14,8 +14,8 @@ import type { TaskClass } from './classify.js';
  * per-attempt schema that means nothing to billing, and is written far more
  * often. JSONL makes each write O(1) instead of a full-file rewrite.
  *
- * This file is what "measured delegation" is measured from. pilotfish's
- * equivalent is hand-committed benchmark JSON.
+ * This file is what "measured delegation" is measured from. Without it the
+ * tier priors would be guesses that never get corrected.
  */
 
 export type Outcome =

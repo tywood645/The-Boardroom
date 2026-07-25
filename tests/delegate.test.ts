@@ -75,8 +75,7 @@ describe('escalation ladder', () => {
   });
 
   // Verifying the top tier buys nothing — a refutation would have nowhere to
-  // go — and it is the most expensive call the delegator can make. pilotfish
-  // verifies on Opus regardless.
+  // go — and it is the most expensive call the delegator can make.
   it('does not verify the top tier', async () => {
     onFetch(replyBy(b => (isCheck(b) ? REFUTED : 'the answer')));
 

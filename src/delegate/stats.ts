@@ -7,10 +7,10 @@ import { readDelegations, type DelegationRecord } from './ledger.js';
 /**
  * Turns the delegation ledger into the starting tier for the next task.
  *
- * This is the difference from pilotfish, whose role→tier map is hand-picked
- * prose with no feedback loop. The rule here is deliberately simple and
- * explainable: a delegator whose decisions you cannot audit is a delegator you will
- * not trust, so every decision carries a `why` string that names the evidence.
+ * A static tier map cannot notice that it is wrong. This one adjusts from
+ * recorded outcomes, but the rule is deliberately simple and explainable: a
+ * delegator whose decisions you cannot audit is a delegator you will not
+ * trust, so every decision carries a `why` string that names the evidence.
  */
 
 /** Below this many samples a cell is treated as unknown and explored. */

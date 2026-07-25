@@ -1,11 +1,11 @@
 /**
  * The refutation contract.
  *
- * pilotfish's verifier returns CONFIRMED or REFUTED and runs on Opus for every
- * non-trivial task. Here the checker runs at the *same* tier as the attempt but
- * on a different vendor, so a cheap answer costs roughly one more cheap call to
- * check rather than one Opus call — and the check comes from a model with
- * genuinely different priors rather than a larger sibling that shares them.
+ * The checker runs at the *same* tier as the attempt but on a different
+ * vendor, so a cheap answer costs roughly one more cheap call to check rather
+ * than one frontier call. Independence matters more than capability here: a
+ * different vendor brings genuinely different priors, where a larger sibling
+ * from the same family tends to share the blind spot that produced the error.
  */
 
 export const VERIFY_SYSTEM = `You are checking another model's answer. You are not improving it, rewriting it, or being polite about it.

@@ -52,10 +52,10 @@ function parsePin(raw: string): { vendor: string; model: string } {
 /**
  * Resolve a tier to a concrete vendor and model.
  *
- * This is the cross-vendor part. pilotfish's tiers *are* Anthropic aliases —
- * cheap means haiku, full stop. Here a tier is a price band, and the cheap
- * band resolves to whichever credentialed vendor is actually cheapest, which
- * on most key sets is deepseek or gemini-flash rather than haiku.
+ * A tier is a price band, not a model alias. The cheap band resolves to
+ * whichever credentialed vendor is actually cheapest, which on most key sets
+ * is deepseek or gemini-flash rather than haiku — an order of magnitude apart
+ * for work that does not need judgment.
  *
  * Precedence: explicit pin, then env override, then cheapest catalog model
  * whose vendor has credentials. A tier with no reachable vendor downgrades to

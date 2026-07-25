@@ -5,9 +5,10 @@ import type { Tier } from '../cost/catalog.js';
  * table — classifying with a model to decide which model to use is circular
  * and adds a call to every delegation.
  *
- * pilotfish has eight named roles that a human picks between in prose. These
- * are seven work shapes the delegator picks between deterministically, and the
- * measured stats in stats.ts are keyed on them.
+ * Seven work shapes the delegator picks between deterministically, plus an
+ * internal one for verification. The measured stats in stats.ts are keyed on
+ * them, so the set is deliberately small and closed — a class split too finely
+ * would never gather enough samples to earn a tier change.
  */
 export type TaskClass =
   | 'recon'
@@ -30,8 +31,8 @@ export function isTaskClass(s: string): s is TaskClass {
 
 /**
  * Starting tier before any measurement exists. stats.ts overrides these once
- * a cell has enough samples — that override is the whole "measured, not
- * guessed" difference from pilotfish's fixed role→tier map.
+ * a cell has enough samples, which is what keeps this table a starting point
+ * rather than a permanent guess.
  */
 export const TIER_PRIORS: Record<TaskClass, Tier> = {
   recon: 'cheap',
