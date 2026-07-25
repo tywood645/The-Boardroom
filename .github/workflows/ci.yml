@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build & test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json declares engines.node >= 18, so 18 is tested rather
+        # than assumed. If it breaks here, the engines claim is wrong.
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+      - run: npm test
+
+  # The eval's value depends on the extractor being deterministic and the
+  # corpus aliases staying disjoint. Both are enforced by tests, but running
+  # them twice catches accidental order- or state-dependence that a single
+  # pass would hide.
+  eval-determinism:
+    name: Eval harness determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Run eval tests twice and compare
+        run: |
+          npm test 2>&1 | grep -E '^# (tests|pass|fail)' > run1.txt
+          npm test 2>&1 | grep -E '^# (tests|pass|fail)' > run2.txt
+          diff run1.txt run2.txt
+          cat run1.txt
