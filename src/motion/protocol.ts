@@ -1,7 +1,7 @@
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
 import { collectStream } from '../provider/collect.js';
-import type { CostTracker } from '../cost/tracker.js';
+import type { RunContext } from '../provider/collect.js';
 import { roleForVendor } from '../boardroom/roles.js';
 import { consultBriefing } from '../boardroom/consultant.js';
 import type { ConsultantBriefing } from '../boardroom/consultant.js';
@@ -18,7 +18,7 @@ export interface MotionOptions {
   consultant?: boolean;
   maxTokens?: number;
   recall?: string | null;       // PRIOR BOARD CONTEXT block prepended to every phase
-  tracker?: CostTracker;        // records spend at the point of the call
+  ctx?: RunContext;             // budget gate, concurrency cap and deadline
 }
 
 /** Every phase prefixes the same briefing block. */
@@ -53,11 +53,11 @@ export async function runMotion(
   const consultantInput = recall ? `${recall}MOTION:\n${motion}` : motion;
   const briefing =
     consultantEnabled && consultant
-      ? await consultBriefing(consultant, consultantInput, undefined, opts.tracker)
+      ? await consultBriefing(consultant, consultantInput, undefined, opts.ctx)
       : null;
 
   // Phase 2: SECOND
-  const seconds = await runSecondPhase(configs, motion, briefing, maxTokens, recall, opts.tracker);
+  const seconds = await runSecondPhase(configs, motion, briefing, maxTokens, recall, opts.ctx);
   const validSeconds = seconds.filter(s => !s.error && s.seconded).length;
 
   if (validSeconds < SECOND_THRESHOLD) {
@@ -76,10 +76,10 @@ export async function runMotion(
   }
 
   // Phase 3: DEBATE
-  const debate = await runDebatePhase(configs, motion, briefing, seconds, maxTokens, recall, opts.tracker);
+  const debate = await runDebatePhase(configs, motion, briefing, seconds, maxTokens, recall, opts.ctx);
 
   // Phase 4: VOTE
-  const votes = await runVotePhase(configs, motion, briefing, debate, maxTokens, recall, opts.tracker);
+  const votes = await runVotePhase(configs, motion, briefing, debate, maxTokens, recall, opts.ctx);
 
   // Tally
   const tally = {
@@ -116,7 +116,7 @@ async function runSecondPhase(
   briefing: ConsultantBriefing | null,
   maxTokens: number,
   recall: string | null,
-  tracker?: CostTracker,
+  ctx?: RunContext,
 ): Promise<SecondVote[]> {
   const briefingBlock = briefingBlockOf(briefing);
 
@@ -140,7 +140,7 @@ async function runSecondPhase(
       }
       const system = systemFor(role.name, role.mindset);
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, tracker);
+        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
         const parsed = parseSecond(result.text);
         return {
           panelist: cfg.name,
@@ -197,7 +197,7 @@ async function runDebatePhase(
   seconds: SecondVote[],
   maxTokens: number,
   recall: string | null,
-  tracker?: CostTracker,
+  ctx?: RunContext,
 ): Promise<DebateSpeech[]> {
   const briefingBlock = briefingBlockOf(briefing);
 
@@ -219,7 +219,7 @@ async function runDebatePhase(
       if (!role) return makeErrorDebate(cfg, 'no role assigned');
       const system = systemFor(role.name, role.mindset);
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, tracker);
+        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
         const parsed = parseDebate(result.text);
         return {
           panelist: cfg.name,
@@ -275,7 +275,7 @@ async function runVotePhase(
   debate: DebateSpeech[],
   maxTokens: number,
   recall: string | null,
-  tracker?: CostTracker,
+  ctx?: RunContext,
 ): Promise<FinalVote[]> {
   const briefingBlock = briefingBlockOf(briefing);
   const recallBlock = recall || '';
@@ -304,7 +304,7 @@ async function runVotePhase(
         `REASON: <one sentence in your role's voice>`;
 
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, tracker);
+        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
         const parsed = parseVote(result.text);
         const flipped = stanceVsVote(myStance, parsed.vote);
         return {
@@ -368,7 +368,7 @@ async function callAndCollect(
   system: string,
   userPrompt: string,
   maxTokens: number,
-  tracker?: CostTracker,
+  ctx?: RunContext,
 ) {
   return collectStream(
     createProvider(cfg),
@@ -379,6 +379,6 @@ async function callAndCollect(
       maxTokens,
       model: cfg.model,
     },
-    { tracker },
+    ctx,
   );
 }

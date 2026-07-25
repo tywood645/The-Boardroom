@@ -1,7 +1,7 @@
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
 import { collectStream } from '../provider/collect.js';
-import type { CostTracker } from '../cost/tracker.js';
+import type { RunContext } from '../provider/collect.js';
 
 export interface Seat {
   config: ProviderConfig;
@@ -25,16 +25,16 @@ export async function askPanel(
   seats: Seat[],
   question: string,
   maxTokens = 2048,
-  tracker?: CostTracker,
+  ctx?: RunContext,
 ): Promise<PanelistAnswer[]> {
-  return Promise.all(seats.map(seat => askOne(seat, question, maxTokens, tracker)));
+  return Promise.all(seats.map(seat => askOne(seat, question, maxTokens, ctx)));
 }
 
 async function askOne(
   seat: Seat,
   question: string,
   maxTokens: number,
-  tracker?: CostTracker,
+  ctx?: RunContext,
 ): Promise<PanelistAnswer> {
   const start = Date.now();
   try {
@@ -47,7 +47,7 @@ async function askOne(
         maxTokens,
         model: seat.config.model,
       },
-      { tracker },
+      ctx,
     );
 
     return {

@@ -36,6 +36,8 @@ export interface MessageCreateParams {
   tools: ToolSchema[];
   maxTokens: number;
   model: string;
+  /** Run-level wall-clock deadline. Aborts connect and body alike. */
+  signal?: AbortSignal;
 }
 
 export type StreamEvent =

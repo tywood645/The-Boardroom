@@ -14,13 +14,52 @@ export function onFetch(handler: Handler): void {
   handlers.push(handler);
 }
 
+/**
+ * Make a canned Response respect an AbortSignal the way real fetch does.
+ *
+ * Without this the mock ignores init.signal entirely, so a deadline can never
+ * interrupt a stalled body and such a test just hangs. Delivery stays
+ * pull-based so a chunk already handed to the consumer is not discarded when
+ * the stream later errors.
+ */
+function abortable(res: Response, signal?: AbortSignal | null): Response {
+  if (!signal || !res.body) return res;
+  if (signal.aborted) throw signal.reason ?? new Error('The operation was aborted');
+
+  const reader = res.body.getReader();
+  let rejectOnAbort: (reason: unknown) => void = () => {};
+  const aborted = new Promise<never>((_, reject) => { rejectOnAbort = reject; });
+  aborted.catch(() => {}); // an abort with no read in flight must not go unhandled
+  signal.addEventListener(
+    'abort',
+    () => rejectOnAbort(signal.reason ?? new Error('The operation was aborted')),
+    { once: true },
+  );
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const result = await Promise.race([reader.read(), aborted]);
+      if (result.done) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(result.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  return new Response(body, { status: res.status, headers: res.headers });
+}
+
 /** Install the mock, call in test setup. */
 export function installMockFetch(): void {
   (globalThis as any).fetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
     const urlStr = typeof url === 'string' ? url : url.toString();
     for (let i = handlers.length - 1; i >= 0; i--) {
-      const result = handlers[i](urlStr, init);
-      if (result) return result instanceof Promise ? result : result;
+      const result = await handlers[i](urlStr, init);
+      if (result) return abortable(result, init?.signal);
     }
     throw new Error(`[mock-fetch] No handler matched: ${urlStr}`);
   };

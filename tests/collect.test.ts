@@ -18,7 +18,9 @@ import {
 import { collectStream } from '../src/provider/collect.ts';
 import { createProvider } from '../src/provider/factory.ts';
 import { CostTracker } from '../src/cost/tracker.ts';
-import { BudgetError } from '../src/util/error.ts';
+import { BudgetError, DeadlineError } from '../src/util/error.ts';
+import { Deadline } from '../src/util/abort.ts';
+import { Semaphore } from '../src/util/semaphore.ts';
 
 const OPENAI_CFG = {
   name: 'openai',
@@ -193,6 +195,66 @@ describe('collectStream budget enforcement', () => {
     const r = await collectStream(createProvider(OPENAI_CFG), PARAMS, { tracker });
     assert.equal(r.text, 'fine');
     assert.ok(tracker.getSessionStats().cost > 0);
+  });
+});
+
+describe('collectStream deadline and concurrency', () => {
+  beforeEach(() => {
+    restoreFetch();
+    installMockFetch();
+  });
+  after(() => restoreFetch());
+
+  // The providers' 30s timer covers connect only and is cleared once headers
+  // land, deliberately, so long streams are never truncated. That leaves a
+  // stalled body able to hang forever; the run deadline is the bound on that.
+  it('aborts a stalled body and does not retry the request', async () => {
+    const handler = countingHandler(() =>
+      // Never closes: pull() is called once, enqueues nothing, and never settles.
+      new Response(
+        new ReadableStream<Uint8Array>({ pull() { return new Promise<void>(() => {}); } }),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      ),
+    );
+    onFetch(handler);
+
+    // The deadline timer is unref'd so a pending deadline never holds the
+    // process open. A real stalled socket is a ref'd handle; this mock stream
+    // is not, so the loop needs something to keep it alive for the assertion.
+    const keepAlive = setInterval(() => {}, 5);
+    const deadline = new Deadline(40, 'test run');
+    try {
+      await assert.rejects(
+        () => collectStream(createProvider(OPENAI_CFG), PARAMS, { signal: deadline.signal }),
+        DeadlineError,
+      );
+      assert.equal(handler.calls, 1, 'a deadline must not be retried into 3x the spend');
+    } finally {
+      deadline.dispose();
+      clearInterval(keepAlive);
+    }
+  });
+
+  it('caps calls in flight across a fan-out', async () => {
+    let peak = 0;
+    let current = 0;
+    onFetch(() => {
+      current++;
+      peak = Math.max(peak, current);
+      return new Promise<Response>(resolve =>
+        setTimeout(() => {
+          current--;
+          resolve(openaiSSE('ok'));
+        }, 10),
+      );
+    });
+
+    const limiter = new Semaphore(2);
+    await Promise.all(
+      Array.from({ length: 6 }, () => collectStream(createProvider(OPENAI_CFG), PARAMS, { limiter })),
+    );
+    assert.ok(peak <= 2, `expected at most 2 concurrent dispatches, saw ${peak}`);
+    assert.equal(limiter.inFlight, 0);
   });
 });
 

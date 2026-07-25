@@ -1,7 +1,7 @@
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
 import { collectStream } from '../provider/collect.js';
-import type { CostTracker } from '../cost/tracker.js';
+import type { RunContext } from '../provider/collect.js';
 
 export interface ConsultantBriefing {
   text: string;
@@ -31,7 +31,7 @@ export async function consultBriefing(
   consultantConfig: ProviderConfig,
   question: string,
   maxTokens = 600,
-  tracker?: CostTracker,
+  ctx?: RunContext,
 ): Promise<ConsultantBriefing | null> {
   try {
     const collected = await collectStream(
@@ -43,7 +43,7 @@ export async function consultBriefing(
         maxTokens,
         model: consultantConfig.model,
       },
-      { tracker },
+      ctx,
     );
 
     if (!collected.text) return null;

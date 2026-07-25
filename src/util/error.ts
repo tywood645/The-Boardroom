@@ -12,6 +12,14 @@ export class ProviderError extends BoardRoomError {
   }
 }
 
+/** Raised when a run exceeds its wall-clock budget. Never retried. */
+export class DeadlineError extends BoardRoomError {
+  constructor(message: string, public readonly deadlineMs: number) {
+    super(message, 'DEADLINE_EXCEEDED');
+    this.name = 'DeadlineError';
+  }
+}
+
 /** Thrown by the pre-dispatch budget gate, before any request is sent. */
 export class BudgetError extends BoardRoomError {
   constructor(message: string, public readonly currentSpend: number, public readonly cap: number) {

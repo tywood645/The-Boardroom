@@ -1,6 +1,7 @@
 import { LLMProvider } from './base.js';
 import type { MessageCreateParams, StreamEvent, ConversationMessage, ContentBlock } from './types.js';
 import { ProviderError } from '../util/error.js';
+import { linkAbort, isDeadlineAbort } from '../util/abort.js';
 import { logger } from '../util/logger.js';
 
 const MAX_RETRIES = 3;
@@ -94,10 +95,14 @@ export class OpenAICompatProvider extends LLMProvider {
     // Consumers accumulate text outside this generator, so a retry after partial
     // output would leave them holding attempt-1's prefix plus all of attempt 2.
     let yieldedContent = false;
+    let unlink: () => void = () => {};
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         const controller = new AbortController();
+        // The run deadline aborts connect and body alike; the connect timer is
+        // cleared once headers land so a long stream is never truncated.
+        unlink = linkAbort(controller, params.signal);
         const connectTimer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
         const response = await fetch(this.baseUrl + '/chat/completions', {
           method: 'POST',
@@ -251,9 +256,13 @@ export class OpenAICompatProvider extends LLMProvider {
         yield* ensureEnd();
         return;
       } catch (e) {
+        if (isDeadlineAbort(e)) throw e;
         if (e instanceof ProviderError && e.statusCode && e.statusCode < 500 && e.statusCode !== 429) throw e;
         lastError = e as Error;
         if (yieldedContent) throw lastError;
+      } finally {
+        unlink();
+        unlink = () => {};
       }
     }
 

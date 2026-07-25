@@ -1,6 +1,7 @@
 import type { LLMProvider } from './base.js';
 import type { MessageCreateParams } from './types.js';
 import type { CostTracker } from '../cost/tracker.js';
+import type { Semaphore } from '../util/semaphore.js';
 import { costOf } from '../cost/catalog.js';
 import { BudgetError, ProviderError } from '../util/error.js';
 
@@ -10,7 +11,8 @@ import { BudgetError, ProviderError } from '../util/error.js';
  * Three near-identical drain loops used to live in panel.ts, consultant.ts and
  * motion/protocol.ts. Collapsing them here fixes token accounting once instead
  * of three times, and — more importantly — creates one choke point that every
- * provider call must pass through, so the budget gate cannot be bypassed.
+ * provider call must pass through, so budget, concurrency and deadline limits
+ * are enforced rather than advised.
  *
  * A test in tests/enforcement-invariant.test.ts asserts that this is the only
  * non-provider file that calls createMessage().
@@ -30,8 +32,17 @@ export interface Collected {
   estimatedInput: boolean;
 }
 
-export interface CollectOptions {
+/**
+ * Everything a run enforces on its provider calls. Threaded through the
+ * protocols so every call inherits the same limits.
+ */
+export interface RunContext {
+  /** Records spend and answers the pre-dispatch budget question. */
   tracker?: CostTracker;
+  /** Caps calls in flight. Applied here so fan-out sites stay unchanged. */
+  limiter?: Semaphore;
+  /** Run-level wall-clock deadline. */
+  signal?: AbortSignal;
 }
 
 /** Rough token estimate for budgeting only. Never reported as actual usage. */
@@ -46,10 +57,25 @@ export function estimateTokens(params: MessageCreateParams): number {
 export async function collectStream(
   provider: LLMProvider,
   params: MessageCreateParams,
-  opts: CollectOptions = {},
+  ctx: RunContext = {},
+): Promise<Collected> {
+  // Wait for a slot before checking the budget, so the gate sees spend that
+  // concurrent calls have already committed rather than a stale total.
+  const release = ctx.limiter ? await ctx.limiter.acquire() : () => {};
+  try {
+    return await dispatch(provider, params, ctx);
+  } finally {
+    release();
+  }
+}
+
+async function dispatch(
+  provider: LLMProvider,
+  params: MessageCreateParams,
+  ctx: RunContext,
 ): Promise<Collected> {
   const model = params.model || provider.modelId;
-  const { tracker } = opts;
+  const { tracker } = ctx;
 
   // Pre-dispatch gate. This runs before fetch, which is the whole point:
   // recording usage afterwards can report an overrun but cannot prevent one.
@@ -57,7 +83,8 @@ export async function collectStream(
     const alert = tracker.reserve(model, estimateTokens(params), params.maxTokens);
     if (alert?.type === 'blocked') {
       throw new BudgetError(
-        `${alert.message} ($${alert.currentSpend.toFixed(4)} of $${alert.cap.toFixed(2)}); refusing to dispatch to ${provider.name}/${model}`,
+        `${alert.message} ($${alert.currentSpend.toFixed(4)} of $${alert.cap.toFixed(2)}); ` +
+          `refusing to dispatch to ${provider.name}/${model}`,
         alert.currentSpend,
         alert.cap,
       );
@@ -70,7 +97,9 @@ export async function collectStream(
   let inputTokens = 0;
   let outputTokens = 0;
 
-  for await (const ev of provider.createMessage(params)) {
+  const stream = provider.createMessage({ ...params, signal: ctx.signal ?? params.signal });
+
+  for await (const ev of stream) {
     switch (ev.type) {
       case 'message_start':
         // Authoritative on the Anthropic path. On OpenAI-compatible streams this
