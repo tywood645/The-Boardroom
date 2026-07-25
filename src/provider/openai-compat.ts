@@ -90,6 +90,10 @@ export class OpenAICompatProvider extends LLMProvider {
     if (tools.length > 0) body.tools = tools;
 
     let lastError: Error | null = null;
+    // Retrying is only safe before the first content delta reaches the consumer.
+    // Consumers accumulate text outside this generator, so a retry after partial
+    // output would leave them holding attempt-1's prefix plus all of attempt 2.
+    let yieldedContent = false;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
@@ -130,23 +134,42 @@ export class OpenAICompatProvider extends LLMProvider {
         let usageInputTokens = 0;
         let usageOutputTokens = 0;
         let messageStartEmitted = false;
+        let endEmitted = false;
 
         // Emit message_start exactly once, before the first content event, so the
         // event order matches the Anthropic path (message_start precedes content).
+        //
+        // It cannot carry token counts: this fires on the first content delta, but
+        // OpenAI-compatible providers only send usage in a chunk at the very end of
+        // the stream. The authoritative counts ride on the terminal message_delta
+        // below, which is emitted after the usage chunk has been seen.
         function* ensureMessageStart(): Generator<StreamEvent> {
           if (!messageStartEmitted) {
-            yield { type: 'message_start', message: { id: '', model: self.model, usage: { input_tokens: usageInputTokens } } } as StreamEvent;
+            yield { type: 'message_start', message: { id: '', model: self.model, usage: { input_tokens: 0 } } } as StreamEvent;
             messageStartEmitted = true;
           }
+        }
+
+        // Terminal events, emitted exactly once whether the stream ends with an
+        // explicit [DONE] marker or just closes. Providers that omit [DONE] would
+        // otherwise drop the usage entirely.
+        function* ensureEnd(): Generator<StreamEvent> {
+          if (endEmitted) return;
+          endEmitted = true;
+          yield* ensureMessageStart();
+          yield {
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn' },
+            usage: { output_tokens: usageOutputTokens, input_tokens: usageInputTokens },
+          } as StreamEvent;
+          yield { type: 'message_stop' } as StreamEvent;
         }
 
         function* processLine(line: string): Generator<StreamEvent> {
           if (!line.startsWith('data: ')) return;
           const data = line.slice(6).trim();
           if (data === '[DONE]') {
-            yield* ensureMessageStart();
-            yield { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: usageOutputTokens } } as StreamEvent;
-            yield { type: 'message_stop' } as StreamEvent;
+            yield* ensureEnd();
             return;
           }
 
@@ -175,6 +198,7 @@ export class OpenAICompatProvider extends LLMProvider {
               yield { type: 'content_block_start', index: blockIndex, content_block: { type: 'text' } } as StreamEvent;
               hasEmittedStart = true;
             }
+            yieldedContent = true;
             yield { type: 'content_block_delta', index: blockIndex, delta: { type: 'text_delta', text: delta.content } } as StreamEvent;
           }
 
@@ -221,14 +245,15 @@ export class OpenAICompatProvider extends LLMProvider {
         }
 
         // Stream ended: flush the decoder, process any remaining buffered line, and
-        // guarantee message_start was emitted even if the [DONE] marker never arrived.
+        // guarantee the terminal events were emitted even if [DONE] never arrived.
         buffer += decoder.decode();
         if (buffer.trim()) yield* processLine(buffer);
-        yield* ensureMessageStart();
+        yield* ensureEnd();
         return;
       } catch (e) {
         if (e instanceof ProviderError && e.statusCode && e.statusCode < 500 && e.statusCode !== 429) throw e;
         lastError = e as Error;
+        if (yieldedContent) throw lastError;
       }
     }
 

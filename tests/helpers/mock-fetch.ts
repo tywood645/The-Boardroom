@@ -69,6 +69,79 @@ export function openaiSSE(text: string, opts: { model?: string; inputTokens?: nu
   return sseResponse(lines.join('\n') + '\n');
 }
 
+/**
+ * OpenAI-style SSE that reports usage but never sends the [DONE] terminator.
+ * Some vendors just close the socket; the stream must still yield both counts.
+ */
+export function openaiSSENoDone(text: string, opts: { model?: string; inputTokens?: number; outputTokens?: number } = {}): Response {
+  const model = opts.model ?? 'gpt-4o';
+  const inputTokens = opts.inputTokens ?? 42;
+  const outputTokens = opts.outputTokens ?? 10;
+
+  const lines = [
+    `data: ${JSON.stringify({ id: 'chatcmpl-mock', model, choices: [{ index: 0, delta: { content: text } }] })}`,
+    `data: ${JSON.stringify({ id: 'chatcmpl-mock', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`,
+    `data: ${JSON.stringify({ id: 'chatcmpl-mock', model, choices: [], usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens } })}`,
+  ];
+
+  return sseResponse(lines.join('\n') + '\n');
+}
+
+/**
+ * A real ReadableStream body that can fail partway through, which a plain
+ * `new Response(string)` cannot do. Needed to exercise mid-stream failure.
+ */
+export function streamingResponse(chunks: string[], opts: { errorAfter?: number; error?: string } = {}): Response {
+  const enc = new TextEncoder();
+  let i = 0;
+  // Delivered via pull, one chunk per read, so `errorAfter: n` fails only after
+  // the consumer has actually received chunks 0..n-1. Erroring from start()
+  // would discard everything already enqueued and look like a failure with no
+  // content at all — the opposite of what these tests need to exercise.
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (opts.errorAfter !== undefined && i === opts.errorAfter) {
+        controller.error(new Error(opts.error ?? 'socket hang up'));
+        return;
+      }
+      if (i >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(enc.encode(chunks[i++]));
+    },
+  });
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+/** One OpenAI-style SSE data line. */
+export function openaiLine(delta: Record<string, unknown>, model = 'gpt-4o'): string {
+  return `data: ${JSON.stringify({ id: 'chatcmpl-mock', model, choices: [{ index: 0, delta }] })}\n`;
+}
+
+/**
+ * Serve responses in order. Returns undefined once exhausted, which the
+ * dispatcher above treats as "no match" so earlier handlers still get a turn.
+ */
+export function queue(responses: Array<Response | (() => Response)>): Handler {
+  let i = 0;
+  return () => {
+    if (i >= responses.length) return undefined as unknown as Response;
+    const next = responses[i++];
+    return typeof next === 'function' ? next() : next;
+  };
+}
+
+/** Wrap a handler to count how many times it was invoked. */
+export function countingHandler(inner: Handler): Handler & { calls: number } {
+  const wrapped = ((url: string, init?: RequestInit) => {
+    wrapped.calls++;
+    return inner(url, init);
+  }) as Handler & { calls: number };
+  wrapped.calls = 0;
+  return wrapped;
+}
+
 /** Build an error response. */
 export function errorResponse(status: number, body: string = 'error'): Response {
   return new Response(body, { status, headers: { 'Content-Type': 'text/plain' } });

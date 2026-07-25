@@ -43,6 +43,9 @@ export type StreamEvent =
   | { type: 'content_block_delta'; index: number; delta: { type: 'text_delta'; text: string } | { type: 'input_json_delta'; partial_json: string } }
   | { type: 'content_block_stop'; index: number }
   | { type: 'message_start'; message: { id: string; model: string; usage: { input_tokens: number } } }
-  | { type: 'message_delta'; delta: { stop_reason: string }; usage: { output_tokens: number } }
+  // input_tokens is optional and authoritative when present. OpenAI-compatible
+  // streams report usage only at the end, after message_start has already been
+  // emitted, so the terminal message_delta is the only place they can carry it.
+  | { type: 'message_delta'; delta: { stop_reason: string }; usage: { output_tokens: number; input_tokens?: number } }
   | { type: 'message_stop' }
   | { type: 'error'; error: { type: string; message: string } };

@@ -8,6 +8,7 @@ export interface SecondVote {
   reason: string;
   inputTokens: number;
   outputTokens: number;
+  cost: number;
   durationMs: number;
   error?: string;
 }
@@ -22,6 +23,7 @@ export interface DebateSpeech {
   case: string;
   inputTokens: number;
   outputTokens: number;
+  cost: number;
   durationMs: number;
   error?: string;
 }
@@ -37,6 +39,7 @@ export interface FinalVote {
   flipped: boolean;             // true if vote disagrees with debate stance
   inputTokens: number;
   outputTokens: number;
+  cost: number;
   durationMs: number;
   error?: string;
 }

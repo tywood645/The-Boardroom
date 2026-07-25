@@ -3,6 +3,7 @@ import { detectProviders } from './provider/factory.js';
 import { runBoardroom, describeAssignment } from './boardroom/protocol.js';
 import { renderBoardroom } from './boardroom/render.js';
 import { CostTracker } from './cost/tracker.js';
+import { loadBudget, describeBudget } from './cost/config.js';
 import { runMotion } from './motion/protocol.js';
 import { renderMotion } from './motion/render.js';
 import { writeMinutes } from './motion/minutes.js';
@@ -23,9 +24,13 @@ export async function main(): Promise<void> {
     .option('--max-tokens <n>', 'Max tokens per panelist response', '1024')
     .option('--no-consultant', 'Skip the Consultant research briefing (isolate vendor priors)')
     .option('--no-recall', 'Skip prior board context (default: load ~/.boardroom/context.md + state.json)')
-    .action(async (questionParts: string[], cmdOpts: { rounds: string; maxTokens: string; consultant: boolean; recall: boolean }) => {
+    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
+    .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
+    .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
+    .action(async (questionParts: string[], cmdOpts: BudgetFlags & { rounds: string; maxTokens: string; consultant: boolean; recall: boolean }) => {
       const question = questionParts.join(' ');
       const configs = ensureConfigs();
+      const tracker = makeTracker(cmdOpts);
       console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
       const rounds = parseInt(cmdOpts.rounds);
       if (rounds !== 1 && rounds !== 2) {
@@ -39,8 +44,11 @@ export async function main(): Promise<void> {
         maxTokens: parseInt(cmdOpts.maxTokens),
         consultant: cmdOpts.consultant,
         recall,
+        tracker,
       });
-      renderBoardroom(result, new CostTracker());
+      renderBoardroom(result);
+      // process.exit skips async teardown, so persist usage before it runs.
+      tracker.flush();
       process.exit(0);
     });
 
@@ -51,9 +59,13 @@ export async function main(): Promise<void> {
     .option('--max-tokens <n>', 'Max tokens per phase response', '600')
     .option('--no-consultant', 'Skip the Consultant research briefing')
     .option('--no-recall', 'Skip prior board context (default: load ~/.boardroom/context.md + state.json)')
-    .action(async (textParts: string[], cmdOpts: { maxTokens: string; consultant: boolean; recall: boolean }) => {
+    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
+    .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
+    .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
+    .action(async (textParts: string[], cmdOpts: BudgetFlags & { maxTokens: string; consultant: boolean; recall: boolean }) => {
       const motion = textParts.join(' ');
       const configs = ensureConfigs();
+      const tracker = makeTracker(cmdOpts);
       console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
       console.log('Motion phases: brief → second → debate → vote → minutes');
       const recall = cmdOpts.recall === false ? null : buildRecallBlock();
@@ -63,6 +75,7 @@ export async function main(): Promise<void> {
         maxTokens: parseInt(cmdOpts.maxTokens),
         consultant: cmdOpts.consultant,
         recall,
+        tracker,
       });
       result.minutesPath = writeMinutes(result);
       // Persist this decision into the institutional memory so future
@@ -73,10 +86,25 @@ export async function main(): Promise<void> {
         console.error('Warning: failed to persist decision to state.json:', e?.message || e);
       }
       renderMotion(result);
+      tracker.flush();
       process.exit(0);
     });
 
   await program.parseAsync(process.argv);
+}
+
+interface BudgetFlags {
+  sessionCap?: string;
+  dailyCap?: string;
+  weeklyCap?: string;
+}
+
+function makeTracker(flags: BudgetFlags): CostTracker {
+  const budget = loadBudget(flags);
+  if (budget.sessionCap || budget.dailyCap || budget.weeklyCap) {
+    console.log('Budget caps: ' + describeBudget(budget));
+  }
+  return new CostTracker(budget);
 }
 
 function ensureConfigs() {

@@ -1,5 +1,7 @@
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
+import { collectStream } from '../provider/collect.js';
+import type { CostTracker } from '../cost/tracker.js';
 
 export interface Seat {
   config: ProviderConfig;
@@ -14,6 +16,7 @@ export interface PanelistAnswer {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  cost: number;
   durationMs: number;
   error?: string;
 }
@@ -22,46 +25,40 @@ export async function askPanel(
   seats: Seat[],
   question: string,
   maxTokens = 2048,
+  tracker?: CostTracker,
 ): Promise<PanelistAnswer[]> {
-  return Promise.all(seats.map(seat => askOne(seat, question, maxTokens)));
+  return Promise.all(seats.map(seat => askOne(seat, question, maxTokens, tracker)));
 }
 
-async function askOne(seat: Seat, question: string, maxTokens: number): Promise<PanelistAnswer> {
+async function askOne(
+  seat: Seat,
+  question: string,
+  maxTokens: number,
+  tracker?: CostTracker,
+): Promise<PanelistAnswer> {
   const start = Date.now();
-  let text = '';
-  let inputTokens = 0;
-  let outputTokens = 0;
-
   try {
-    const provider = createProvider(seat.config);
-    const stream = provider.createMessage({
-      system: seat.system,
-      messages: [{ role: 'user', content: question }],
-      tools: [],
-      maxTokens,
-      model: seat.config.model,
-    });
-
-    for await (const ev of stream) {
-      if (ev.type === 'message_start') {
-        inputTokens = ev.message.usage.input_tokens;
-      } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
-        text += ev.delta.text;
-      } else if (ev.type === 'message_delta') {
-        outputTokens = ev.usage.output_tokens;
-      } else if (ev.type === 'error') {
-        throw new Error(ev.error.message);
-      }
-    }
+    const collected = await collectStream(
+      createProvider(seat.config),
+      {
+        system: seat.system,
+        messages: [{ role: 'user', content: question }],
+        tools: [],
+        maxTokens,
+        model: seat.config.model,
+      },
+      { tracker },
+    );
 
     return {
       panelist: seat.config.name,
       role: seat.role,
       model: seat.config.model,
-      text: text.trim(),
-      inputTokens,
-      outputTokens,
-      durationMs: Date.now() - start,
+      text: collected.text,
+      inputTokens: collected.inputTokens,
+      outputTokens: collected.outputTokens,
+      cost: collected.cost,
+      durationMs: collected.durationMs,
     };
   } catch (e: any) {
     return {
@@ -71,6 +68,7 @@ async function askOne(seat: Seat, question: string, maxTokens: number): Promise<
       text: '',
       inputTokens: 0,
       outputTokens: 0,
+      cost: 0,
       durationMs: Date.now() - start,
       error: e?.message || String(e),
     };

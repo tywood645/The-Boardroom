@@ -1,7 +1,6 @@
 import { LLMProvider } from './base.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAICompatProvider } from './openai-compat.js';
-import { logger } from '../util/logger.js';
 
 export interface ProviderConfig {
   name: string;
@@ -9,24 +8,6 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   baseUrl?: string;
-}
-
-const MODEL_ALIASES: Record<string, { provider: string; model: string }> = {
-  'opus': { provider: 'anthropic', model: 'claude-opus-4-20250514' },
-  'sonnet': { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
-  'haiku': { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-  'gpt4o': { provider: 'openai', model: 'gpt-4o' },
-  'gpt4o-mini': { provider: 'openai', model: 'gpt-4o-mini' },
-  'grok': { provider: 'xai', model: 'grok-3' },
-  'grok-mini': { provider: 'xai', model: 'grok-3-mini' },
-  'gemini': { provider: 'google', model: 'gemini-2.0-flash' },
-  'gemini-pro': { provider: 'google', model: 'gemini-1.5-pro' },
-  'deepseek': { provider: 'deepseek', model: 'deepseek-chat' },
-  'sonar': { provider: 'perplexity', model: 'sonar-pro' },
-};
-
-export function resolveModelAlias(input: string): string {
-  return MODEL_ALIASES[input]?.model || input;
 }
 
 export function createProvider(config: ProviderConfig): LLMProvider {
@@ -39,10 +20,6 @@ export function createProvider(config: ProviderConfig): LLMProvider {
     baseUrl: config.baseUrl || 'https://api.openai.com/v1',
     name: config.name,
   });
-}
-
-export function createProviderChain(configs: ProviderConfig[]): LLMProvider[] {
-  return configs.map(c => createProvider(c));
 }
 
 function detectKeyProviders(): ProviderConfig[] {

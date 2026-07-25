@@ -55,6 +55,10 @@ export class AnthropicProvider extends LLMProvider {
     };
 
     let lastError: Error | null = null;
+    // Retrying is only safe before the first content delta reaches the consumer.
+    // Consumers accumulate text outside this generator, so a retry after partial
+    // output would leave them holding attempt-1's prefix plus all of attempt 2.
+    let yieldedContent = false;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
@@ -98,7 +102,10 @@ export class AnthropicProvider extends LLMProvider {
           buffer = chunks.pop()!;
 
           for (const chunk of chunks) {
-            yield* parseAnthropicChunk(chunk);
+            for (const ev of parseAnthropicChunk(chunk)) {
+              if (ev.type === 'content_block_delta') yieldedContent = true;
+              yield ev;
+            }
           }
         }
 
@@ -106,7 +113,10 @@ export class AnthropicProvider extends LLMProvider {
         // emit any final event still buffered without a blank-line terminator.
         buffer += decoder.decode();
         for (const chunk of buffer.split('\n\n')) {
-          yield* parseAnthropicChunk(chunk);
+          for (const ev of parseAnthropicChunk(chunk)) {
+            if (ev.type === 'content_block_delta') yieldedContent = true;
+            yield ev;
+          }
         }
         return;
       } catch (e) {
@@ -114,6 +124,7 @@ export class AnthropicProvider extends LLMProvider {
           throw e;
         }
         lastError = e as Error;
+        if (yieldedContent) throw lastError;
       }
     }
 

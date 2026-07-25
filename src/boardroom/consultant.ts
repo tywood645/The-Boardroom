@@ -1,5 +1,7 @@
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
+import { collectStream } from '../provider/collect.js';
+import type { CostTracker } from '../cost/tracker.js';
 
 export interface ConsultantBriefing {
   text: string;
@@ -7,6 +9,7 @@ export interface ConsultantBriefing {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cost: number;
   durationMs: number;
 }
 
@@ -28,42 +31,30 @@ export async function consultBriefing(
   consultantConfig: ProviderConfig,
   question: string,
   maxTokens = 600,
+  tracker?: CostTracker,
 ): Promise<ConsultantBriefing | null> {
-  const start = Date.now();
-  let text = '';
-  let inputTokens = 0;
-  let outputTokens = 0;
-
   try {
-    const provider = createProvider(consultantConfig);
-    const stream = provider.createMessage({
-      system: CONSULTANT_SYSTEM,
-      messages: [{ role: 'user', content: question }],
-      tools: [],
-      maxTokens,
-      model: consultantConfig.model,
-    });
+    const collected = await collectStream(
+      createProvider(consultantConfig),
+      {
+        system: CONSULTANT_SYSTEM,
+        messages: [{ role: 'user', content: question }],
+        tools: [],
+        maxTokens,
+        model: consultantConfig.model,
+      },
+      { tracker },
+    );
 
-    for await (const ev of stream) {
-      if (ev.type === 'message_start') {
-        inputTokens = ev.message.usage.input_tokens;
-      } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
-        text += ev.delta.text;
-      } else if (ev.type === 'message_delta') {
-        outputTokens = ev.usage.output_tokens;
-      } else if (ev.type === 'error') {
-        throw new Error(ev.error.message);
-      }
-    }
-
-    if (!text.trim()) return null;
+    if (!collected.text) return null;
     return {
-      text: text.trim(),
+      text: collected.text,
       source: consultantConfig.name,
       model: consultantConfig.model,
-      inputTokens,
-      outputTokens,
-      durationMs: Date.now() - start,
+      inputTokens: collected.inputTokens,
+      outputTokens: collected.outputTokens,
+      cost: collected.cost,
+      durationMs: collected.durationMs,
     };
   } catch {
     return null;
