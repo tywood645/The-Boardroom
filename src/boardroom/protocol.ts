@@ -10,7 +10,7 @@ export interface BoardroomResult {
   round2?: PanelistAnswer[];
 }
 
-const ROUND1_BASE = `You are a member of a small advisory board for a solo founder. You have a specific role on this board (described below). Stay strictly in that role, do not pretend to be a generalist.
+export const ROUND1_BASE = `You are a member of a small advisory board for a solo founder. You have a specific role on this board (described below). Stay strictly in that role, do not pretend to be a generalist.
 
 ANSWER FORMAT:
 - First sentence: your recommendation, in plain language. No markdown headers.
