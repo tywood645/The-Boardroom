@@ -4,11 +4,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installMockFetch, restoreFetch, onFetch, openaiSSE, countingHandler } from './helpers/mock-fetch.ts';
-import { route, MAX_ESCALATIONS } from '../src/router/escalate.ts';
-import { classify, TIER_PRIORS } from '../src/router/classify.ts';
-import { parseVerdict } from '../src/router/verify.ts';
-import { appendRoute, readRoutes, type RouteRecord } from '../src/router/ledger.ts';
-import { loadStats, pickStartTier, MIN_SAMPLES } from '../src/router/stats.ts';
+import { delegate, MAX_ESCALATIONS } from '../src/delegate/escalate.ts';
+import { classify, TIER_PRIORS } from '../src/delegate/classify.ts';
+import { parseVerdict } from '../src/delegate/verify.ts';
+import { appendDelegation, readDelegations, type DelegationRecord } from '../src/delegate/ledger.ts';
+import { loadStats, pickStartTier, MIN_SAMPLES } from '../src/delegate/stats.ts';
 import type { ProviderConfig } from '../src/provider/factory.ts';
 
 // Three vendors so every tier has a distinct model and a distinct checker.
@@ -37,7 +37,7 @@ describe('escalation ladder', () => {
   let origHome: string | undefined;
 
   before(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'boardroom-router-test-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'boardroom-delegator-test-'));
     origHome = process.env.HOME;
     process.env.HOME = tmpDir;
   });
@@ -57,7 +57,7 @@ describe('escalation ladder', () => {
     const handler = countingHandler(replyBy(b => (isCheck(b) ? CONFIRMED : 'the answer')));
     onFetch(handler);
 
-    const r = await route('summarize this', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
+    const r = await delegate('summarize this', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
     assert.equal(r.attempts.length, 1);
     assert.equal(r.finalOutcome, 'confirmed');
     assert.equal(r.answer, 'the answer');
@@ -68,19 +68,19 @@ describe('escalation ladder', () => {
   it('escalates one tier per refutation and stops at the top', async () => {
     onFetch(replyBy(b => (isCheck(b) ? REFUTED : 'the answer')));
 
-    const r = await route('summarize this', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
+    const r = await delegate('summarize this', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
     const tiers = r.attempts.map(a => a.tier);
     assert.deepEqual(tiers, ['cheap', 'mid', 'frontier']);
     assert.equal(r.attempts.length, MAX_ESCALATIONS + 1);
   });
 
   // Verifying the top tier buys nothing — a refutation would have nowhere to
-  // go — and it is the most expensive call the router can make. pilotfish
+  // go — and it is the most expensive call the delegator can make. pilotfish
   // verifies on Opus regardless.
   it('does not verify the top tier', async () => {
     onFetch(replyBy(b => (isCheck(b) ? REFUTED : 'the answer')));
 
-    const r = await route('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
+    const r = await delegate('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
     const top = r.attempts[r.attempts.length - 1];
     assert.equal(top.tier, 'frontier');
     assert.equal(top.verdictBy, undefined);
@@ -92,7 +92,7 @@ describe('escalation ladder', () => {
   it('treats a refutation with no named defect as a confirmation', async () => {
     onFetch(replyBy(b => (isCheck(b) ? 'VERDICT: REFUTED\nDEFECT: none' : 'the answer')));
 
-    const r = await route('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
+    const r = await delegate('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
     assert.equal(r.attempts.length, 1);
     assert.equal(r.finalOutcome, 'confirmed');
   });
@@ -102,7 +102,7 @@ describe('escalation ladder', () => {
   it('does not escalate on an unparseable verdict', async () => {
     onFetch(replyBy(b => (isCheck(b) ? 'I think it looks pretty good honestly' : 'the answer')));
 
-    const r = await route('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
+    const r = await delegate('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
     assert.equal(r.attempts.length, 1);
     assert.equal(r.finalOutcome, 'unverified');
   });
@@ -115,7 +115,7 @@ describe('escalation ladder', () => {
       return openaiSSE(isCheck(body) ? REFUTED : 'the answer', { inputTokens: 10, outputTokens: 5 });
     });
 
-    const r = await route('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
+    const r = await delegate('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
     for (const a of r.attempts) {
       if (a.verdictBy) assert.notEqual(a.verdictBy, `${a.vendor}:${a.model}`);
     }
@@ -126,14 +126,14 @@ describe('escalation ladder', () => {
     const handler = countingHandler(replyBy(() => 'the answer'));
     onFetch(handler);
 
-    const r = await route('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map(), verify: false });
+    const r = await delegate('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map(), verify: false });
     assert.equal(handler.calls, 1);
     assert.equal(r.finalOutcome, 'unverified');
   });
 
   it('honours a floor tier', async () => {
     onFetch(replyBy(b => (isCheck(b) ? CONFIRMED : 'the answer')));
-    const r = await route('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map(), minTier: 'mid' });
+    const r = await delegate('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map(), minTier: 'mid' });
     assert.equal(r.attempts[0].tier, 'mid');
     assert.match(r.startWhy, /--min-tier/);
   });
@@ -148,7 +148,7 @@ describe('escalation ladder', () => {
       throw new Error('vendor exploded');
     });
 
-    const r = await route('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
+    const r = await delegate('x', CONFIGS, {}, { taskClass: 'summarize', stats: new Map() });
     assert.equal(r.answer, 'the answer', 'work already paid for must not be discarded');
   });
 });
@@ -211,7 +211,7 @@ describe('classifier', () => {
   });
 });
 
-describe('routing ledger and measured tiers', () => {
+describe('delegation ledger and measured tiers', () => {
   let tmpDir: string;
   let origHome: string | undefined;
 
@@ -226,7 +226,7 @@ describe('routing ledger and measured tiers', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function rec(over: Partial<RouteRecord> = {}): RouteRecord {
+  function rec(over: Partial<DelegationRecord> = {}): DelegationRecord {
     return {
       v: 1, ts: new Date().toISOString(), runId: 'r', attempt: 0,
       cls: 'summarize', tier: 'cheap', vendor: 'google', model: 'gemini-2.0-flash',
@@ -237,9 +237,9 @@ describe('routing ledger and measured tiers', () => {
   }
 
   it('round-trips records and survives a corrupt line', () => {
-    appendRoute(rec());
-    appendRoute(rec({ outcome: 'refuted' }));
-    const all = readRoutes();
+    appendDelegation(rec());
+    appendDelegation(rec({ outcome: 'refuted' }));
+    const all = readDelegations();
     assert.equal(all.length, 2);
     assert.equal(all[1].outcome, 'refuted');
   });
@@ -252,7 +252,7 @@ describe('routing ledger and measured tiers', () => {
   });
 
   // This is "measured, not guessed": the prior says cheap, the evidence says
-  // cheap keeps failing, so the router starts one tier up on its own.
+  // cheap keeps failing, so the delegator starts one tier up on its own.
   it('promotes a tier once the evidence says it keeps failing', () => {
     const records = [
       ...Array.from({ length: 8 }, () => rec({ tier: 'cheap', outcome: 'refuted' })),

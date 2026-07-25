@@ -178,16 +178,16 @@ Default response budgets are 1024 tokens per panelist in `ask` mode and 600 toke
 
 ---
 
-## `boardroom route` — cheap-first tiered dispatch
+## `boardroom delegate` — cheap-first tiered dispatch
 
-A sibling of the board, not a layer under it. The board seats one vendor per role to *manufacture disagreement*; the router picks one model per task to *minimise cost*. Opposite objectives, so `roles.ts` is untouched and this is a separate command.
+A sibling of the board, not a layer under it. The board seats one vendor per role to *manufacture disagreement*; the delegator picks one model per task to *minimise cost*. Opposite objectives, so `roles.ts` is untouched and this is a separate command.
 
 The reference point is [pilotfish](https://github.com/Nanako0129/pilotfish), a configuration layer for Claude Code that pins eight named agent roles to Anthropic tiers and states the orchestration policy as prose in `~/.claude/CLAUDE.md`. Its own design doc lists what it deliberately excludes: enforcement hooks, per-project config, and any telemetry feedback loop. This is the same idea built as a runtime, which changes four things.
 
-**Tiers are price bands, not model aliases.** For pilotfish a tier *is* an Anthropic alias — cheap means haiku. Here a tier resolves at runtime against whichever vendors you have credentialed, ranked by the same catalog that prices the budget gate, so the router can never select a model it cannot price:
+**Tiers are price bands, not model aliases.** For pilotfish a tier *is* an Anthropic alias — cheap means haiku. Here a tier resolves at runtime against whichever vendors you have credentialed, ranked by the same catalog that prices the budget gate, so the delegator can never select a model it cannot price:
 
 ```
-$ boardroom route stats
+$ boardroom delegate stats
 === Tier resolution ===
   cheap    → google/gemini-2.0-flash   $0.18/Mtok blended
   mid      → google/gemini-1.5-pro     $2.19/Mtok blended
@@ -200,18 +200,18 @@ With Google credentialed, cheap is gemini-flash at `$0.10/$0.40` rather than hai
 
 - A `REFUTED` that names no defect is treated as `CONFIRMED`. Otherwise a model that reflexively refuses to approve anything drives the ladder to the most expensive tier for free.
 - An unparseable verdict does not escalate. Failing open on escalation while failing closed on budget is the right asymmetry: a parser miss must never be able to spend frontier money.
-- The top tier is never verified. A refutation there would have nowhere to go, and it is the single most expensive call the router can make.
+- The top tier is never verified. A refutation there would have nowhere to go, and it is the single most expensive call the delegator can make.
 
-**Routing is measured, not guessed.** Every attempt lands in `~/.boardroom/routing.jsonl` with its tier, vendor, cost, latency and outcome. `pickStartTier` starts from the class prior and walks up while the measured confirm rate at the current tier is poor, needing a minimum sample count so one bad run never moves the router. Every decision carries a `why` string naming its evidence — a router you cannot audit is a router you will not trust. pilotfish's equivalent is a hand-picked map in prose with hand-committed benchmark JSON.
+**Delegation is measured, not guessed.** Every attempt lands in `~/.boardroom/delegations.jsonl` with its tier, vendor, cost, latency and outcome. `pickStartTier` starts from the class prior and walks up while the measured confirm rate at the current tier is poor, needing a minimum sample count so one bad run never moves the delegator. Every decision carries a `why` string naming its evidence — a delegator you cannot audit is a delegator you will not trust. pilotfish's equivalent is a hand-picked map in prose with hand-committed benchmark JSON.
 
 **Limits are enforced, not stated.** Budget, concurrency and deadline are applied inside `collectStream()`, the single function every provider call passes through. `tests/enforcement-invariant.test.ts` asserts that no other file calls `createMessage`, so there is no path to a provider that skips the gate. The budget check runs *before* the request is sent and prices the worst case, so a call that would breach a cap is refused rather than reported after the fact.
 
 ```bash
-boardroom route "summarize this changelog"            # classify, dispatch, verify
-boardroom route --explain --class code "..."          # show the decision and every attempt
-boardroom route --min-tier mid --session-cap 0.25 "..."
-boardroom route --model deepseek:deepseek-chat "..."  # pin one model, no escalation
-boardroom route stats                                 # what each tier resolves to, and how it has been doing
+boardroom delegate "summarize this changelog"            # classify, dispatch, verify
+boardroom delegate --explain --class code "..."          # show the decision and every attempt
+boardroom delegate --min-tier mid --session-cap 0.25 "..."
+boardroom delegate --model deepseek:deepseek-chat "..."  # pin one model, no escalation
+boardroom delegate stats                                 # what each tier resolves to, and how it has been doing
 ```
 
 Task classes are `recon`, `extract`, `summarize`, `draft`, `code`, `reason`, `research`, plus an internal `review`. Classification is a deterministic rules table, never a model call — classifying with a model to decide which model to use is circular and adds a call to every route.
@@ -250,7 +250,7 @@ No LLM SDK dependency: both provider clients are hand-rolled `fetch` + SSE.
 
 These are directions the architecture already invites, not commitments:
 
-- Routing over OpenRouter and Ollama slugs (both backends currently seat the board only; the router reads per-vendor keys).
+- Delegation over OpenRouter and Ollama slugs (both backends currently seat the board only; the delegator reads per-vendor keys).
 - Prompt caching across the three motion phases, which resend the same recall and briefing to the same vendor each time.
 - Configurable vendor-to-role assignment (the map is currently fixed in `roles.ts`).
 - Richer minutes: per-advisor token and cost breakdown inside the meeting file.

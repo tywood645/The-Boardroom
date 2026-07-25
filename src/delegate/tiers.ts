@@ -5,10 +5,10 @@ import { BoardRoomError } from '../util/error.js';
 
 export type { Tier };
 
-export class RouterError extends BoardRoomError {
+export class DelegationError extends BoardRoomError {
   constructor(message: string) {
     super(message, 'ROUTER_ERROR');
-    this.name = 'RouterError';
+    this.name = 'DelegationError';
   }
 }
 
@@ -44,7 +44,7 @@ function withModel(config: ProviderConfig, model: string): ProviderConfig {
 function parsePin(raw: string): { vendor: string; model: string } {
   const idx = raw.indexOf(':');
   if (idx < 1 || idx === raw.length - 1) {
-    throw new RouterError(`Tier override "${raw}" must be in vendor:model form, e.g. deepseek:deepseek-chat`);
+    throw new DelegationError(`Tier override "${raw}" must be in vendor:model form, e.g. deepseek:deepseek-chat`);
   }
   return { vendor: raw.slice(0, idx), model: raw.slice(idx + 1) };
 }
@@ -75,7 +75,7 @@ export function resolveTier(
     const { vendor, model } = parsePin(override);
     const config = byVendor.get(vendor);
     if (!config) {
-      throw new RouterError(
+      throw new DelegationError(
         `Tier "${tier}" is pinned to ${vendor}:${model}, but no credentials were detected for ${vendor}.`,
       );
     }
@@ -119,7 +119,7 @@ export function resolveTier(
     return resolution;
   }
 
-  throw new RouterError(
+  throw new DelegationError(
     `No credentialed model available at tier "${tier}" or below. ` +
       `Detected vendors: ${configs.map(c => c.name).join(', ') || 'none'}.`,
   );
@@ -131,7 +131,7 @@ export function nextTier(tier: Tier): Tier | null {
   return i >= 0 && i < TIERS.length - 1 ? TIERS[i + 1] : null;
 }
 
-/** What every tier would resolve to right now, for `route stats` and --explain. */
+/** What every tier would resolve to right now, for `delegate stats` and --explain. */
 export function describeTiers(configs: ProviderConfig[]): string[] {
   return TIERS.map(tier => {
     try {

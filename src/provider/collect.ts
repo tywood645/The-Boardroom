@@ -24,7 +24,7 @@ export interface Collected {
   outputTokens: number;
   cost: number;
   durationMs: number;
-  /** Time to first text delta; the router's latency signal. */
+  /** Time to first text delta; the delegator's latency signal. */
   ttfbMs: number;
   vendor: string;
   model: string;

@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTier, nextTier, RouterError } from '../src/router/tiers.ts';
+import { resolveTier, nextTier, DelegationError } from '../src/delegate/tiers.ts';
 import { Semaphore } from '../src/util/semaphore.ts';
 import { Deadline } from '../src/util/abort.ts';
 import type { ProviderConfig } from '../src/provider/factory.ts';
@@ -73,7 +73,7 @@ describe('cross-vendor tier resolution', () => {
   it('rejects a pin for a vendor with no credentials', () => {
     assert.throws(
       () => resolveTier('cheap', [cfg('google', 'y')], {}, 'deepseek:deepseek-chat'),
-      RouterError,
+      DelegationError,
     );
   });
 
@@ -86,7 +86,7 @@ describe('cross-vendor tier resolution', () => {
   });
 
   it('throws when nothing is credentialed at all', () => {
-    assert.throws(() => resolveTier('cheap', []), RouterError);
+    assert.throws(() => resolveTier('cheap', []), DelegationError);
   });
 
   it('walks the ladder in price order', () => {

@@ -3,10 +3,10 @@ import type { Tier } from '../cost/catalog.js';
 /**
  * What shape of work a task is. Deliberately a small closed set with a rules
  * table — classifying with a model to decide which model to use is circular
- * and adds a call to every route.
+ * and adds a call to every delegation.
  *
  * pilotfish has eight named roles that a human picks between in prose. These
- * are seven work shapes the router picks between deterministically, and the
+ * are seven work shapes the delegator picks between deterministically, and the
  * measured stats in stats.ts are keyed on them.
  */
 export type TaskClass =
@@ -17,7 +17,7 @@ export type TaskClass =
   | 'code'
   | 'reason'
   | 'research'
-  // Set internally when the router asks one model to check another's work.
+  // Set internally when the delegator asks one model to check another's work.
   | 'review';
 
 export const TASK_CLASSES: readonly TaskClass[] = [

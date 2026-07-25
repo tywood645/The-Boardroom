@@ -7,7 +7,7 @@ import { BudgetError, DeadlineError } from '../util/error.js';
 import { resolveTier, nextTier, type Resolution } from './tiers.js';
 import { classify, type TaskClass } from './classify.js';
 import { loadStats, pickStartTier } from './stats.js';
-import { appendRoute, type Outcome } from './ledger.js';
+import { appendDelegation, type Outcome } from './ledger.js';
 import { VERIFY_SYSTEM, buildVerifyPrompt, parseVerdict, type Verdict } from './verify.js';
 
 /**
@@ -24,14 +24,14 @@ export const MAX_ESCALATIONS = 2;
 /** Belt and braces, independent of the ladder. */
 export const MAX_ATTEMPTS = 4;
 
-const ROUTE_SYSTEM = `You are completing a single, self-contained task. Answer it directly and completely.
+const DELEGATE_SYSTEM = `You are completing a single, self-contained task. Answer it directly and completely.
 
 Do not restate the task. Do not explain your approach unless the task asks for it. Do not hedge.
 If the task is ambiguous, state the single assumption you made in one sentence, then answer under it.`;
 
-export interface RouteOptions {
+export interface DelegateOptions {
   taskClass?: TaskClass;
-  /** Floor for the ladder; the router never starts below this. */
+  /** Floor for the ladder; the delegator never starts below this. */
   minTier?: Tier;
   /** "vendor:model" pin. Disables escalation, since the model was chosen for us. */
   pin?: string;
@@ -54,7 +54,7 @@ export interface Attempt {
   downgradedFrom?: Tier;
 }
 
-export interface RouteResult {
+export interface DelegateResult {
   task: string;
   cls: TaskClass;
   classifiedWhy: string;
@@ -93,12 +93,12 @@ function classifyFailure(e: unknown): { outcome: Outcome; reason: string } {
   return { outcome: 'error', reason: e instanceof Error ? e.message : String(e) };
 }
 
-export async function route(
+export async function delegate(
   task: string,
   configs: ProviderConfig[],
   ctx: RunContext,
-  opts: RouteOptions = {},
-): Promise<RouteResult> {
+  opts: DelegateOptions = {},
+): Promise<DelegateResult> {
   const maxTokens = opts.maxTokens ?? 1024;
   const verifyEnabled = opts.verify !== false && !opts.pin;
 
@@ -110,7 +110,7 @@ export async function route(
     startTier === picked.tier ? picked.why : `${picked.why}; raised to ${startTier} by --min-tier`;
 
   const runId = `${Date.now().toString(36)}-${cls}`;
-  const result: RouteResult = {
+  const result: DelegateResult = {
     task,
     cls,
     classifiedWhy,
@@ -136,7 +136,7 @@ export async function route(
 
     let answer: Collected;
     try {
-      answer = await callOnce(resolved.config, ROUTE_SYSTEM, task, maxTokens, ctx);
+      answer = await callOnce(resolved.config, DELEGATE_SYSTEM, task, maxTokens, ctx);
     } catch (e) {
       const { outcome, reason } = classifyFailure(e);
       result.attempts.push({
@@ -149,7 +149,7 @@ export async function route(
         outcome,
         downgradedFrom: resolved.downgradedFrom,
       });
-      appendRoute({
+      appendDelegation({
         v: 1, ts: new Date().toISOString(), runId, attempt,
         cls, tier: resolved.tier, vendor: resolved.vendor, model: resolved.model,
         downgradedFrom: resolved.downgradedFrom,
@@ -178,7 +178,7 @@ export async function route(
 
     // The top tier is the end of the ladder. Verifying it buys nothing, since
     // a refutation would have nowhere to escalate to — and it is the single
-    // most expensive call the router can make.
+    // most expensive call the delegator can make.
     const atTop = nextTier(resolved.tier) === null;
     const canEscalate = escalations < MAX_ESCALATIONS && !atTop;
 
@@ -201,7 +201,7 @@ export async function route(
 
     const escalateTo = record.outcome === 'refuted' ? nextTier(resolved.tier) : null;
 
-    appendRoute({
+    appendDelegation({
       v: 1, ts: new Date().toISOString(), runId, attempt,
       cls, tier: resolved.tier, vendor: resolved.vendor, model: resolved.model,
       downgradedFrom: resolved.downgradedFrom,

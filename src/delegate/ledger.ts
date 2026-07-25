@@ -6,7 +6,7 @@ import type { Tier } from '../cost/catalog.js';
 import type { TaskClass } from './classify.js';
 
 /**
- * Append-only record of what the router did and whether it worked.
+ * Append-only record of what the delegator did and whether it worked.
  *
  * Kept separate from usage.json on purpose. usage.json is the billing ledger,
  * filtered over a 30-day window and rewritten wholesale; this needs a longer
@@ -14,7 +14,7 @@ import type { TaskClass } from './classify.js';
  * per-attempt schema that means nothing to billing, and is written far more
  * often. JSONL makes each write O(1) instead of a full-file rewrite.
  *
- * This file is what "measured routing" is measured from. pilotfish's
+ * This file is what "measured delegation" is measured from. pilotfish's
  * equivalent is hand-committed benchmark JSON.
  */
 
@@ -26,7 +26,7 @@ export type Outcome =
   | 'deadline'
   | 'budget_blocked';
 
-export interface RouteRecord {
+export interface DelegationRecord {
   v: 1;
   ts: string;
   runId: string;
@@ -54,10 +54,10 @@ export interface RouteRecord {
 export function ledgerPath(): string {
   const dir = join(homedir(), '.boardroom');
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return join(dir, 'routing.jsonl');
+  return join(dir, 'delegations.jsonl');
 }
 
-export function appendRoute(record: RouteRecord): void {
+export function appendDelegation(record: DelegationRecord): void {
   const path = ledgerPath();
   try {
     const existed = existsSync(path);
@@ -65,28 +65,28 @@ export function appendRoute(record: RouteRecord): void {
     // mode applies only at creation; tighten a pre-existing file too.
     if (!existed) chmodSync(path, 0o600);
   } catch (e) {
-    // Losing a routing record must never fail the task it describes.
-    logger.warn('Failed to append to routing.jsonl:', e instanceof Error ? e.message : e);
+    // Losing a delegation record must never fail the task it describes.
+    logger.warn('Failed to append to delegations.jsonl:', e instanceof Error ? e.message : e);
   }
 }
 
-export function readRoutes(sinceMs?: number): RouteRecord[] {
+export function readDelegations(sinceMs?: number): DelegationRecord[] {
   const path = ledgerPath();
   if (!existsSync(path)) return [];
   let raw: string;
   try {
     raw = readFileSync(path, 'utf-8');
   } catch (e) {
-    logger.warn('Failed to read routing.jsonl:', e instanceof Error ? e.message : e);
+    logger.warn('Failed to read delegations.jsonl:', e instanceof Error ? e.message : e);
     return [];
   }
 
   const cutoff = sinceMs ? new Date(Date.now() - sinceMs).toISOString() : null;
-  const out: RouteRecord[] = [];
+  const out: DelegationRecord[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     try {
-      const rec = JSON.parse(line) as RouteRecord;
+      const rec = JSON.parse(line) as DelegationRecord;
       // A truncated or hand-edited line must not take the whole history with it.
       if (rec?.v !== 1 || typeof rec.ts !== 'string') continue;
       if (cutoff && rec.ts < cutoff) continue;

@@ -2,14 +2,14 @@ import type { Tier } from '../cost/catalog.js';
 import { TIERS } from '../cost/catalog.js';
 import type { TaskClass } from './classify.js';
 import { TIER_PRIORS } from './classify.js';
-import { readRoutes, type RouteRecord } from './ledger.js';
+import { readDelegations, type DelegationRecord } from './ledger.js';
 
 /**
- * Turns the routing ledger into the starting tier for the next task.
+ * Turns the delegation ledger into the starting tier for the next task.
  *
  * This is the difference from pilotfish, whose role→tier map is hand-picked
  * prose with no feedback loop. The rule here is deliberately simple and
- * explainable: a router whose decisions you cannot audit is a router you will
+ * explainable: a delegator whose decisions you cannot audit is a delegator you will
  * not trust, so every decision carries a `why` string that names the evidence.
  */
 
@@ -17,7 +17,7 @@ import { readRoutes, type RouteRecord } from './ledger.js';
 export const MIN_SAMPLES = 5;
 /** Below this confirmed-rate a tier is considered to be failing the class. */
 export const PROMOTE_BELOW = 0.6;
-/** Ledger window used for routing decisions. */
+/** Ledger window used for delegation decisions. */
 export const WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
 export interface CellStat {
@@ -36,8 +36,8 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-export function loadStats(records: RouteRecord[] = readRoutes(WINDOW_MS)): Map<CellKey, CellStat> {
-  const buckets = new Map<CellKey, RouteRecord[]>();
+export function loadStats(records: DelegationRecord[] = readDelegations(WINDOW_MS)): Map<CellKey, CellStat> {
+  const buckets = new Map<CellKey, DelegationRecord[]>();
   for (const r of records) {
     // Only attempts that were actually judged tell us anything about quality.
     if (r.outcome !== 'confirmed' && r.outcome !== 'refuted') continue;
@@ -69,7 +69,7 @@ export interface TierChoice {
 /**
  * Start at the class's prior, then walk up while the measured confirm rate at
  * the current tier is poor. Only cells with enough samples can promote, so a
- * single bad run never moves the router.
+ * single bad run never moves the delegator.
  */
 export function pickStartTier(cls: TaskClass, stats: Map<CellKey, CellStat>): TierChoice {
   const prior = TIER_PRIORS[cls];
@@ -104,9 +104,9 @@ export function pickStartTier(cls: TaskClass, stats: Map<CellKey, CellStat>): Ti
   }
 }
 
-/** Rows for `boardroom route stats`. */
+/** Rows for `boardroom delegate stats`. */
 export function formatStats(stats: Map<CellKey, CellStat>): string[] {
-  if (stats.size === 0) return ['(no verified routing history yet)'];
+  if (stats.size === 0) return ['(no verified delegation history yet)'];
   const rows = [...stats.entries()].sort(([a], [b]) => a.localeCompare(b));
   return rows.map(([key, s]) => {
     const [cls, tier] = key.split(':');

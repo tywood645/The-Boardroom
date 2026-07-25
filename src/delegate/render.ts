@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import type { RouteResult } from './escalate.js';
+import type { DelegateResult } from './escalate.js';
 import { describeTiers } from './tiers.js';
 import { formatStats, loadStats } from './stats.js';
 import type { ProviderConfig } from '../provider/factory.js';
@@ -13,7 +13,7 @@ const OUTCOME_STYLE: Record<string, (s: string) => string> = {
   budget_blocked: chalk.bold.red,
 };
 
-export function renderRoute(r: RouteResult, explain: boolean): void {
+export function renderDelegation(r: DelegateResult, explain: boolean): void {
   if (explain) {
     console.log(chalk.dim(`class:  ${r.cls} (${r.classifiedWhy})`));
     console.log(chalk.dim(`start:  ${r.startTier} (${r.startWhy})`));
@@ -52,7 +52,7 @@ export function renderStats(configs: ProviderConfig[]): void {
   for (const line of describeTiers(configs)) console.log('  ' + line);
 
   console.log();
-  console.log(chalk.bold.cyan('=== Measured routing ==='));
-  console.log(chalk.dim('Confirm rate per task class and tier, from verified runs in routing.jsonl.'));
+  console.log(chalk.bold.cyan('=== Measured delegation ==='));
+  console.log(chalk.dim('Confirm rate per task class and tier, from verified runs in delegations.jsonl.'));
   for (const line of formatStats(loadStats())) console.log('  ' + line);
 }

@@ -2,7 +2,7 @@ import { logger } from '../util/logger.js';
 
 /**
  * Model catalog: the single table that both prices a call and places a model in
- * a routing tier. Keeping these together means the router can never route to a
+ * a delegation tier. Keeping these together means the delegator can never pick a
  * model it cannot price.
  *
  * Prices are USD per 1M tokens.
