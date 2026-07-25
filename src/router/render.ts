@@ -1,0 +1,58 @@
+import chalk from 'chalk';
+import type { RouteResult } from './escalate.js';
+import { describeTiers } from './tiers.js';
+import { formatStats, loadStats } from './stats.js';
+import type { ProviderConfig } from '../provider/factory.js';
+
+const OUTCOME_STYLE: Record<string, (s: string) => string> = {
+  confirmed: chalk.bold.green,
+  refuted: chalk.bold.red,
+  unverified: chalk.bold.yellow,
+  error: chalk.bold.red,
+  deadline: chalk.bold.red,
+  budget_blocked: chalk.bold.red,
+};
+
+export function renderRoute(r: RouteResult, explain: boolean): void {
+  if (explain) {
+    console.log(chalk.dim(`class:  ${r.cls} (${r.classifiedWhy})`));
+    console.log(chalk.dim(`start:  ${r.startTier} (${r.startWhy})`));
+    console.log();
+  }
+
+  console.log(r.answer || chalk.dim('(no answer produced)'));
+  console.log();
+
+  for (const [i, a] of r.attempts.entries()) {
+    const style = OUTCOME_STYLE[a.outcome] ?? chalk.bold;
+    const downgrade = a.downgradedFrom ? chalk.yellow(` (downgraded from ${a.downgradedFrom})`) : '';
+    console.log(
+      chalk.dim(`attempt ${i + 1}  `) +
+        `${a.tier.padEnd(8)} ${chalk.dim(a.vendor + '/' + a.model)}${downgrade}  ` +
+        `${style(a.outcome)}  ` +
+        chalk.dim(`$${a.cost.toFixed(4)} · ${a.durationMs}ms`),
+    );
+    if (a.verdictBy) {
+      console.log(chalk.dim(`            checked by ${a.verdictBy}: ${a.verdict?.why ?? 'no verdict'}`));
+    }
+    if (a.verdict?.defect) {
+      console.log(chalk.red(`            defect: ${a.verdict.defect}`));
+    }
+  }
+
+  if (r.stoppedBecause) {
+    console.log(chalk.yellow(`\nstopped: ${r.stoppedBecause}`));
+  }
+  console.log(chalk.dim(`\nTotal: $${r.totalCost.toFixed(4)} across ${r.attempts.length} attempt(s)`));
+}
+
+export function renderStats(configs: ProviderConfig[]): void {
+  console.log(chalk.bold.cyan('=== Tier resolution ==='));
+  console.log(chalk.dim('What each tier resolves to with the vendors currently credentialed.'));
+  for (const line of describeTiers(configs)) console.log('  ' + line);
+
+  console.log();
+  console.log(chalk.bold.cyan('=== Measured routing ==='));
+  console.log(chalk.dim('Confirm rate per task class and tier, from verified runs in routing.jsonl.'));
+  for (const line of formatStats(loadStats())) console.log('  ' + line);
+}

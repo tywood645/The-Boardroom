@@ -12,6 +12,7 @@ import { renderMotion } from './motion/render.js';
 import { writeMinutes } from './motion/minutes.js';
 import { appendDecision } from './state/store.js';
 import { buildRecallBlock } from './state/format.js';
+import { registerRoute } from './cli/route.js';
 
 export async function main(): Promise<void> {
   const program = new Command()
@@ -98,6 +99,11 @@ export async function main(): Promise<void> {
       tracker.flush();
       process.exit(0);
     });
+
+  // Tiered dispatch. A sibling of the board, not a layer under it: the board
+  // seats one vendor per role to manufacture disagreement, the router picks
+  // one model per task to minimise cost. Opposite objectives, separate command.
+  registerRoute(program);
 
   await program.parseAsync(process.argv);
 }

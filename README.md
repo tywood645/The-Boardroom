@@ -178,6 +178,46 @@ Default response budgets are 1024 tokens per panelist in `ask` mode and 600 toke
 
 ---
 
+## `boardroom route` — cheap-first tiered dispatch
+
+A sibling of the board, not a layer under it. The board seats one vendor per role to *manufacture disagreement*; the router picks one model per task to *minimise cost*. Opposite objectives, so `roles.ts` is untouched and this is a separate command.
+
+The reference point is [pilotfish](https://github.com/Nanako0129/pilotfish), a configuration layer for Claude Code that pins eight named agent roles to Anthropic tiers and states the orchestration policy as prose in `~/.claude/CLAUDE.md`. Its own design doc lists what it deliberately excludes: enforcement hooks, per-project config, and any telemetry feedback loop. This is the same idea built as a runtime, which changes four things.
+
+**Tiers are price bands, not model aliases.** For pilotfish a tier *is* an Anthropic alias — cheap means haiku. Here a tier resolves at runtime against whichever vendors you have credentialed, ranked by the same catalog that prices the budget gate, so the router can never select a model it cannot price:
+
+```
+$ boardroom route stats
+=== Tier resolution ===
+  cheap    → google/gemini-2.0-flash   $0.18/Mtok blended
+  mid      → google/gemini-1.5-pro     $2.19/Mtok blended
+  frontier → anthropic/claude-opus-5  $30.00/Mtok blended
+```
+
+With Google credentialed, cheap is gemini-flash at `$0.10/$0.40` rather than haiku at `$0.80/$4.00`. A tier with no reachable vendor downgrades and reports `downgradedFrom` rather than failing or silently substituting — `frontier` is single-vendor today, and that should be visible.
+
+**Escalation is bought, not spent by default.** The cheapest capable tier is attempted first; a checker at the *same* tier on a *different vendor* tries to refute it; only a concretely named defect buys a more expensive attempt. pilotfish runs its verifier on Opus for every non-trivial task regardless of whether the cheap attempt was fine. Here a cheap answer costs roughly one more cheap call to check, and the check comes from a model with genuinely different priors rather than a larger sibling that shares them. Three loop-safety rules matter:
+
+- A `REFUTED` that names no defect is treated as `CONFIRMED`. Otherwise a model that reflexively refuses to approve anything drives the ladder to the most expensive tier for free.
+- An unparseable verdict does not escalate. Failing open on escalation while failing closed on budget is the right asymmetry: a parser miss must never be able to spend frontier money.
+- The top tier is never verified. A refutation there would have nowhere to go, and it is the single most expensive call the router can make.
+
+**Routing is measured, not guessed.** Every attempt lands in `~/.boardroom/routing.jsonl` with its tier, vendor, cost, latency and outcome. `pickStartTier` starts from the class prior and walks up while the measured confirm rate at the current tier is poor, needing a minimum sample count so one bad run never moves the router. Every decision carries a `why` string naming its evidence — a router you cannot audit is a router you will not trust. pilotfish's equivalent is a hand-picked map in prose with hand-committed benchmark JSON.
+
+**Limits are enforced, not stated.** Budget, concurrency and deadline are applied inside `collectStream()`, the single function every provider call passes through. `tests/enforcement-invariant.test.ts` asserts that no other file calls `createMessage`, so there is no path to a provider that skips the gate. The budget check runs *before* the request is sent and prices the worst case, so a call that would breach a cap is refused rather than reported after the fact.
+
+```bash
+boardroom route "summarize this changelog"            # classify, dispatch, verify
+boardroom route --explain --class code "..."          # show the decision and every attempt
+boardroom route --min-tier mid --session-cap 0.25 "..."
+boardroom route --model deepseek:deepseek-chat "..."  # pin one model, no escalation
+boardroom route stats                                 # what each tier resolves to, and how it has been doing
+```
+
+Task classes are `recon`, `extract`, `summarize`, `draft`, `code`, `reason`, `research`, plus an internal `review`. Classification is a deterministic rules table, never a model call — classifying with a model to decide which model to use is circular and adds a call to every route.
+
+---
+
 ## Engineering highlights
 
 For anyone reading the source, these are the parts worth a look:
@@ -210,8 +250,9 @@ No LLM SDK dependency: both provider clients are hand-rolled `fetch` + SSE.
 
 These are directions the architecture already invites, not commitments:
 
+- Routing over OpenRouter and Ollama slugs (both backends currently seat the board only; the router reads per-vendor keys).
+- Prompt caching across the three motion phases, which resend the same recall and briefing to the same vendor each time.
 - Configurable vendor-to-role assignment (the map is currently fixed in `roles.ts`).
-- Surfacing budget caps and warn thresholds as CLI flags rather than constructor config.
 - Richer minutes: per-advisor token and cost breakdown inside the meeting file.
 - A `history` command to browse and cite past decisions from the CLI.
 - Tool-use is modeled in the provider types but unused by the protocols; advisor-side research tools are a natural extension.
