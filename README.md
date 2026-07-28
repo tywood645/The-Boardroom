@@ -200,6 +200,20 @@ The catalog carries current-generation models only. "Still has a published price
 
 Nothing here is a constraint, though. Every board seat takes `BOARDROOM_<VENDOR>_MODEL` (`BOARDROOM_OPENAI_MODEL`, `BOARDROOM_GOOGLE_MODEL`, and so on for all six), and the delegator takes `--model vendor:model` or `BOARDROOM_TIER_<TIER>`. Any of those accept a model string the catalog has never heard of: it is dispatched normally and priced at the warned default. So a model released tomorrow is usable today, and a stale default here is a nuisance rather than a wall.
 
+**The catalog is checked against the vendors, not trusted.** It is a hand-maintained table, and it rots silently — a model can be retired, shut down, or quietly superseded with nothing in the build noticing:
+
+```
+$ boardroom delegate --verify-catalog
+=== Catalog vs vendor ===
+  anthropic   ok
+  google      stale
+      gone: gemini-2.0-flash — the vendor no longer lists this
+      1 carried and confirmed, 47 served but not carried (--json to list)
+  openai      skipped — no credentials
+```
+
+It asks every credentialed vendor which models it actually serves and exits non-zero when the catalog names one that is gone — that entry cannot be called at all, and since tiers resolve by price, a cheap dead model wins its tier outright and every delegation routed to it fails. A vendor that cannot be reached is reported but does not fail the run, because being unable to ask is not evidence the catalog is wrong; `--strict` inverts that for a release gate, where a run that checked nothing must not read as a pass. The count of models a vendor serves but the catalog does not carry is the other half: it is how you notice a model is still purchasable but several generations behind, which no liveness check would ever flag.
+
 **Escalation is bought, not spent by default.** The cheapest capable tier is attempted first; a checker at the *same* tier on a *different vendor* tries to refute it; only a concretely named defect buys a more expensive attempt. A cheap answer therefore costs roughly one more cheap call to check, not a frontier call — and the check comes from a model with genuinely different priors, where a larger sibling from the same family tends to share the blind spot that produced the error. Three loop-safety rules matter:
 
 - A `REFUTED` that names no defect is treated as `CONFIRMED`. Otherwise a model that reflexively refuses to approve anything drives the ladder to the most expensive tier for free.

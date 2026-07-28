@@ -6,7 +6,8 @@ import { Semaphore } from '../util/semaphore.js';
 import { Deadline } from '../util/abort.js';
 import type { RunContext } from '../provider/collect.js';
 import { delegate } from '../delegate/escalate.js';
-import { renderDelegation, renderStats } from '../delegate/render.js';
+import { renderDelegation, renderStats, renderVerifyCatalog } from '../delegate/render.js';
+import { verifyCatalog } from '../delegate/verify-catalog.js';
 import { isTaskClass, TASK_CLASSES, type TaskClass } from '../delegate/classify.js';
 import { TIERS, type Tier } from '../cost/catalog.js';
 
@@ -24,6 +25,8 @@ interface DelegateFlags {
   verify: boolean;
   explain?: boolean;
   json?: boolean;
+  verifyCatalog?: boolean;
+  strict?: boolean;
   sessionCap?: string;
   dailyCap?: string;
   weeklyCap?: string;
@@ -47,6 +50,8 @@ export function registerDelegate(program: Command): void {
     .option('--no-verify', 'Skip cross-vendor verification (cheaper, unchecked)')
     .option('--explain', 'Show the delegation decision and every attempt')
     .option('--json', 'Emit the full result as JSON')
+    .option('--verify-catalog', "Ask every credentialed vendor which models it serves; exit non-zero if the catalog names one that is gone")
+    .option('--strict', 'With --verify-catalog, also fail when a vendor could not be checked at all')
     .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend', DEFAULT_SESSION_CAP)
     .option('--daily-cap <usd>', "Refuse to dispatch once today's recorded spend would exceed this")
     .option('--weekly-cap <usd>', "Refuse to dispatch once this week's recorded spend would exceed this")
@@ -63,9 +68,29 @@ export function registerDelegate(program: Command): void {
         process.exit(0);
       }
 
+      // The catalog is hand-maintained and goes stale silently. This asks the
+      // vendors instead of trusting the table, and exits non-zero when one of
+      // them says a model we carry is gone, so it can gate a release.
+      if (flags.verifyCatalog || (parts.length === 1 && parts[0] === 'verify-catalog')) {
+        if (configs.length === 0) {
+          console.error('No providers detected, so there is nobody to ask. Set at least one vendor API key (see .env.example).');
+          process.exit(1);
+        }
+        const result = await verifyCatalog(configs);
+        if (flags.json) console.log(JSON.stringify(result, null, 2));
+        else renderVerifyCatalog(result, Boolean(flags.strict));
+        // Without --strict an unchecked vendor passes, so one key locally is
+        // useful rather than noisy. A release gate wants the opposite: a run
+        // that checked nothing knows nothing, and must not read as a pass.
+        const failed = !result.ok || (Boolean(flags.strict) && result.incomplete);
+        process.exit(failed ? 1 : 0);
+      }
+
       const task = parts.join(' ').trim();
       if (!task) {
-        console.error('Usage: boardroom delegate <task...>   |   boardroom delegate stats');
+        console.error(
+          'Usage: boardroom delegate <task...>   |   boardroom delegate stats   |   boardroom delegate --verify-catalog',
+        );
         process.exit(1);
       }
 
