@@ -22,7 +22,7 @@ describe('CostTracker', () => {
 
   it('computes cost using model pricing table', () => {
     const tracker = new CostTracker();
-    const { cost } = tracker.recordUsage('claude-sonnet-4-20250514', 1000, 500);
+    const { cost } = tracker.recordUsage('claude-sonnet-5', 1000, 500);
     assert.ok(Math.abs(cost - 0.0105) < 0.0001);
   });
 
@@ -37,8 +37,8 @@ describe('CostTracker', () => {
 
   it('blocks when session cap exceeded', () => {
     const tracker = new CostTracker({ sessionCap: 0.001 });
-    const { alert } = tracker.recordUsage('claude-opus-4-20250514', 1000, 1000);
-    // opus: (1000*15 + 1000*75)/1M = 0.09 >> 0.001
+    const { alert } = tracker.recordUsage('claude-opus-5', 1000, 1000);
+    // opus 5: (1000*5 + 1000*25)/1M = 0.03 >> 0.001
     assert.ok(alert);
     assert.equal(alert!.type, 'blocked');
   });

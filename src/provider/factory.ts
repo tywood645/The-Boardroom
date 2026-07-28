@@ -30,7 +30,9 @@ function detectKeyProviders(): ProviderConfig[] {
       name: 'anthropic',
       type: 'anthropic',
       apiKey: process.env.ANTHROPIC_API_KEY,
-      model: process.env.BOARDROOM_ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
+      // Must be a currently active model: Sonnet 4 was retired on 2026-06-15
+      // and every request to it now fails.
+      model: process.env.BOARDROOM_ANTHROPIC_MODEL || 'claude-sonnet-5',
     });
   }
 

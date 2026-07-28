@@ -34,7 +34,7 @@ const ANTHROPIC_CFG = {
   name: 'anthropic',
   type: 'anthropic' as const,
   apiKey: 'test',
-  model: 'claude-sonnet-4-20250514',
+  model: 'claude-sonnet-5',
 };
 
 const PARAMS = {
@@ -160,7 +160,7 @@ describe('collectStream budget enforcement', () => {
     onFetch(handler);
 
     const tracker = new CostTracker({ sessionCap: 0.01 });
-    tracker.recordUsage('claude-opus-4-20250514', 1000, 1000); // $0.09
+    tracker.recordUsage('claude-opus-5', 1000, 1000); // $0.03, past the $0.01 cap
 
     await assert.rejects(
       () => collectStream(createProvider(OPENAI_CFG), PARAMS, { tracker }),
@@ -173,14 +173,14 @@ describe('collectStream budget enforcement', () => {
     const handler = countingHandler(() => openaiSSE('must not happen'));
     onFetch(handler);
 
-    // maxTokens 100000 of opus output is ~$7.50, well past a $0.50 cap, even
+    // maxTokens 100000 of opus 5 output is ~$2.50, well past a $0.50 cap, even
     // though nothing has been spent yet.
     const tracker = new CostTracker({ sessionCap: 0.5 });
     await assert.rejects(
       () =>
         collectStream(
           createProvider(ANTHROPIC_CFG),
-          { ...PARAMS, model: 'claude-opus-4-20250514', maxTokens: 100_000 },
+          { ...PARAMS, model: 'claude-opus-5', maxTokens: 100_000 },
           { tracker },
         ),
       BudgetError,

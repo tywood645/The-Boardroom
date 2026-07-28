@@ -30,11 +30,13 @@ export const CATALOG: Record<string, ModelSpec> = {
   // standard rate is listed instead, because the budget gate reserves against
   // this table: pricing the discount would under-reserve today and silently
   // stop being wrong when the discount lapses.
+  // Only models that are currently active. Claude Opus 4 and Sonnet 4 were
+  // retired on 2026-06-15 and now fail outright, so listing them would let
+  // resolveTier hand back a model that cannot be called at all -- a worse
+  // version of the mispricing this table exists to prevent.
   'claude-opus-5': { vendor: 'anthropic', input: 5.0, output: 25.0, tier: 'frontier' },
   'claude-sonnet-5': { vendor: 'anthropic', input: 3.0, output: 15.0, tier: 'mid' },
   'claude-fable-5': { vendor: 'anthropic', input: 10.0, output: 50.0, tier: 'frontier' },
-  'claude-opus-4-20250514': { vendor: 'anthropic', input: 15.0, output: 75.0, tier: 'frontier' },
-  'claude-sonnet-4-20250514': { vendor: 'anthropic', input: 3.0, output: 15.0, tier: 'mid' },
   'claude-haiku-4-5-20251001': { vendor: 'anthropic', input: 1.0, output: 5.0, tier: 'cheap' },
 
   // ── OpenAI ──
@@ -67,8 +69,6 @@ export const CATALOG: Record<string, ModelSpec> = {
  */
 const ALIASES: Record<string, string> = {
   'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
-  'claude-opus-4-0': 'claude-opus-4-20250514',
-  'claude-sonnet-4-0': 'claude-sonnet-4-20250514',
 };
 
 /** Resolve an alias to its catalog key; returns the input if it is already one. */

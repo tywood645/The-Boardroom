@@ -16,7 +16,7 @@ const CONFIGS: ProviderConfig[] = [
   { name: 'google', type: 'openai', apiKey: 'k', model: 'gemini-2.0-flash', baseUrl: 'https://google.test/v1' },
   { name: 'deepseek', type: 'openai', apiKey: 'k', model: 'deepseek-chat', baseUrl: 'https://deepseek.test/v1' },
   { name: 'openai', type: 'openai', apiKey: 'k', model: 'gpt-4o', baseUrl: 'https://openai.test/v1' },
-  { name: 'anthropic', type: 'anthropic', apiKey: 'k', model: 'claude-opus-4-20250514' },
+  { name: 'anthropic', type: 'anthropic', apiKey: 'k', model: 'claude-opus-5' },
 ];
 
 const CONFIRMED = 'VERDICT: CONFIRMED\nDEFECT: none';

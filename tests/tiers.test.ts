@@ -31,7 +31,7 @@ describe('cross-vendor tier resolution', () => {
   // With Google credentialed, cheap is gemini-flash at $0.10/$0.40 rather than
   // haiku at $1.00/$5.00 — over 10x on identical work.
   it('picks the cheapest credentialed vendor for a tier, across vendors', () => {
-    const configs = [cfg('anthropic', 'claude-sonnet-4-20250514'), cfg('google', 'gemini-2.0-flash')];
+    const configs = [cfg('anthropic', 'claude-sonnet-5'), cfg('google', 'gemini-2.0-flash')];
     const r = resolveTier('cheap', configs);
     assert.equal(r.vendor, 'google');
     assert.equal(r.model, 'gemini-2.0-flash');
@@ -45,7 +45,7 @@ describe('cross-vendor tier resolution', () => {
   });
 
   it('resolves cheap to Anthropic only when nothing cheaper is credentialed', () => {
-    const r = resolveTier('cheap', [cfg('anthropic', 'claude-sonnet-4-20250514')]);
+    const r = resolveTier('cheap', [cfg('anthropic', 'claude-sonnet-5')]);
     assert.equal(r.vendor, 'anthropic');
     assert.equal(r.model, 'claude-haiku-4-5-20251001');
   });

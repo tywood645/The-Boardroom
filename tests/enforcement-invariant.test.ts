@@ -63,7 +63,7 @@ describe('enforcement invariants', () => {
   // config naming the alias must not fall through to DEFAULT_PRICING — for
   // Haiku that is a 3x overcharge on every call it records.
   it('prices an undated alias exactly like its dated entry', () => {
-    for (const alias of ['claude-haiku-4-5', 'claude-opus-4-0', 'claude-sonnet-4-0']) {
+    for (const alias of ['claude-haiku-4-5']) {
       const dated = canonicalModel(alias);
       const spec = CATALOG[dated];
       assert.ok(spec, `alias "${alias}" points at "${dated}", which is not in the catalog`);
@@ -75,6 +75,27 @@ describe('enforcement invariants', () => {
     // resolving the alias is the difference between $1/$5 and a silent 3x
     // overcharge. Both Sonnet rates coincide with the fallback exactly.
     assert.notDeepEqual(priceFor('claude-haiku-4-5'), DEFAULT_PRICING);
+  });
+
+  // Retired models fail outright rather than costing the wrong amount, so a
+  // retired row is worse than a mispriced one: resolveTier picks from this
+  // table, and would hand back a model no request can reach. Sonnet 4 and
+  // Opus 4 were both listed here until they had been dead for six weeks.
+  it('lists no model that has been retired from the API', () => {
+    const retired = [
+      'claude-opus-4-20250514',
+      'claude-sonnet-4-20250514',
+      'claude-3-7-sonnet-20250219',
+      'claude-3-5-haiku-20241022',
+      'claude-3-haiku-20240307',
+      'claude-3-opus-20240229',
+      'claude-3-5-sonnet-20241022',
+      'claude-3-5-sonnet-20240620',
+    ];
+    for (const model of retired) {
+      assert.ok(!CATALOG[model], `"${model}" is retired; requests to it fail`);
+      assert.equal(canonicalModel(model), model, `an alias still resolves to retired "${model}"`);
+    }
   });
 
   it('has at least one model in every tier', () => {

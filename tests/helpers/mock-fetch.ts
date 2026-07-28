@@ -75,7 +75,7 @@ export function restoreFetch(): void {
 
 /** Build an Anthropic-style SSE response from a text string. */
 export function anthropicSSE(text: string, opts: { model?: string; inputTokens?: number; outputTokens?: number } = {}): Response {
-  const model = opts.model ?? 'claude-sonnet-4-20250514';
+  const model = opts.model ?? 'claude-sonnet-5';
   const inputTokens = opts.inputTokens ?? 42;
   const outputTokens = opts.outputTokens ?? 10;
 

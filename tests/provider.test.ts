@@ -25,10 +25,10 @@ describe('Anthropic streaming', () => {
   it('yields text from SSE', async () => {
     onFetch(() => anthropicSSE('BoardRoom CEO advice'));
 
-    const p = createProvider({ name: 'anthropic', type: 'anthropic', apiKey: 'k', model: 'claude-sonnet-4-20250514' });
+    const p = createProvider({ name: 'anthropic', type: 'anthropic', apiKey: 'k', model: 'claude-sonnet-5' });
     let text = '';
     for await (const ev of p.createMessage({
-      system: 'test', messages: [{ role: 'user', content: 'hi' }], tools: [], maxTokens: 100, model: 'claude-sonnet-4-20250514',
+      system: 'test', messages: [{ role: 'user', content: 'hi' }], tools: [], maxTokens: 100, model: 'claude-sonnet-5',
     })) {
       if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') text += ev.delta.text;
     }
