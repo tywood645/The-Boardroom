@@ -44,15 +44,23 @@ export const CATALOG: Record<string, ModelSpec> = {
   'gpt-4o-mini': { vendor: 'openai', input: 0.15, output: 0.60, tier: 'cheap' },
 
   // ── xAI ──
-  'grok-3': { vendor: 'xai', input: 3.0, output: 15.0, tier: 'mid' },
-  'grok-3-mini': { vendor: 'xai', input: 0.30, output: 0.50, tier: 'cheap' },
+  // grok-3 was retired on 2026-05-15 and grok-3-mini is absent from every
+  // current xAI page. Requests to the retired slug are billed at grok-4.3's
+  // rates, not the old ones, so the entry was wrong even for callers it
+  // still appeared to work for.
+  'grok-4.3': { vendor: 'xai', input: 1.25, output: 2.50, tier: 'mid' },
 
   // ── Google ──
-  'gemini-2.0-flash': { vendor: 'google', input: 0.10, output: 0.40, tier: 'cheap' },
-  'gemini-1.5-pro': { vendor: 'google', input: 1.25, output: 5.0, tier: 'mid' },
+  // gemini-2.0-flash was shut down 2026-06-01 and gemini-1.5-pro is gone from
+  // Google's docs entirely. flash-lite is the current cheap class and happens
+  // to carry the same $0.10/$0.40 the dead 2.0-flash did.
+  'gemini-2.5-flash-lite': { vendor: 'google', input: 0.10, output: 0.40, tier: 'cheap' },
+  'gemini-2.5-pro': { vendor: 'google', input: 1.25, output: 10.0, tier: 'mid' },
 
   // ── DeepSeek ──
-  'deepseek-chat': { vendor: 'deepseek', input: 0.27, output: 1.10, tier: 'cheap' },
+  // deepseek-chat was retired on 2026-07-24. Input is the cache-MISS rate;
+  // the cache-hit rate is ~50x lower and would badly under-reserve.
+  'deepseek-v4-flash': { vendor: 'deepseek', input: 0.14, output: 0.28, tier: 'cheap' },
 
   // ── Perplexity ──
   'sonar-pro': { vendor: 'perplexity', input: 3.0, output: 15.0, tier: 'mid' },
@@ -115,19 +123,48 @@ export function costOf(model: string, inputTokens: number, outputTokens: number)
  *
  * Only the ordering within a tier is load-bearing — modelsInTier() filters
  * before it sorts, so the ratio would have to reorder two models in the same
- * band to change any decision. It does not: within every band here the spread
- * is far wider than the ratio's influence. Across bands the numbers do abut
- * (Haiku 4.5 blends to $2.00, mid-tier gemini-1.5-pro to $2.19), which is why
- * a tier is defined by the assignment in CATALOG rather than by a price
- * threshold — bands are capability, priced roughly.
+ * band to change a decision, and modelsInTier breaks the remaining ties
+ * explicitly rather than leaving them to this number.
+ *
+ * Across bands the price ranges do not merely abut, they overlap: mid-tier
+ * grok-4.3 blends to $1.56, below cheap-tier Haiku 4.5 at $2.00. That is not
+ * a bug to correct. A tier is a capability band that price only approximates,
+ * so it is set by the assignment in CATALOG and never inferred from a
+ * threshold — otherwise cross-vendor escalation could walk downhill in price
+ * while walking uphill in capability, which is exactly what it should do when
+ * a vendor prices a strong model cheaply.
+ *
+ * Known limitation: gemini-2.5-pro and grok-4.3 are priced by context length
+ * (both roughly double above a 200k-token prompt, and xAI reprices every token
+ * in the request rather than just the overflow). Only the base tier is
+ * modelled, so the budget gate under-reserves for very large prompts.
  */
 export function blendedPrice(spec: ModelSpec): number {
   return (spec.input * 3 + spec.output) / 4;
 }
 
+/**
+ * Models in a tier, cheapest first, under a total order.
+ *
+ * Ties are real and not hypothetical: gemini-2.5-flash-lite ($0.10/$0.40) and
+ * deepseek-v4-flash ($0.14/$0.28) blend to exactly $0.175. Sorting on blended
+ * price alone leaves the winner to be decided by which line sits higher in the
+ * CATALOG literal, which would make a routing decision an artifact of file
+ * layout -- measured-looking, arbitrary in fact.
+ *
+ * So the comparison falls through to output price (the volatile half of a
+ * bill, and the half a verbose answer inflates), then to the model name, which
+ * cannot tie. The rule is arbitrary but fixed, declared, and tested; that is
+ * the property that matters, not which of two equally priced models wins.
+ */
 export function modelsInTier(tier: Tier): Array<{ model: string; spec: ModelSpec }> {
   return Object.entries(CATALOG)
     .filter(([, spec]) => spec.tier === tier)
     .map(([model, spec]) => ({ model, spec }))
-    .sort((a, b) => blendedPrice(a.spec) - blendedPrice(b.spec));
+    .sort(
+      (a, b) =>
+        blendedPrice(a.spec) - blendedPrice(b.spec) ||
+        a.spec.output - b.spec.output ||
+        a.model.localeCompare(b.model),
+    );
 }

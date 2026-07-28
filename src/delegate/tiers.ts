@@ -44,7 +44,7 @@ function withModel(config: ProviderConfig, model: string): ProviderConfig {
 function parsePin(raw: string): { vendor: string; model: string } {
   const idx = raw.indexOf(':');
   if (idx < 1 || idx === raw.length - 1) {
-    throw new DelegationError(`Tier override "${raw}" must be in vendor:model form, e.g. deepseek:deepseek-chat`);
+    throw new DelegationError(`Tier override "${raw}" must be in vendor:model form, e.g. deepseek:deepseek-v4-flash`);
   }
   return { vendor: raw.slice(0, idx), model: raw.slice(idx + 1) };
 }

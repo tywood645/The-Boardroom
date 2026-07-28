@@ -31,17 +31,31 @@ describe('cross-vendor tier resolution', () => {
   // With Google credentialed, cheap is gemini-flash at $0.10/$0.40 rather than
   // haiku at $1.00/$5.00 — over 10x on identical work.
   it('picks the cheapest credentialed vendor for a tier, across vendors', () => {
-    const configs = [cfg('anthropic', 'claude-sonnet-5'), cfg('google', 'gemini-2.0-flash')];
+    const configs = [cfg('anthropic', 'claude-sonnet-5'), cfg('google', 'gemini-2.5-flash-lite')];
     const r = resolveTier('cheap', configs);
     assert.equal(r.vendor, 'google');
-    assert.equal(r.model, 'gemini-2.0-flash');
+    assert.equal(r.model, 'gemini-2.5-flash-lite');
   });
 
   it('falls to the next cheapest when the cheapest vendor has no credentials', () => {
-    const r = resolveTier('cheap', [cfg('deepseek', 'deepseek-chat'), cfg('openai', 'gpt-4o')]);
-    // deepseek-chat blended (0.27*3+1.10)/4 = 0.4775 vs gpt-4o-mini (0.15*3+0.60)/4 = 0.2625
+    // Google and DeepSeek own the two cheapest cheap-tier models (both blend to
+    // $0.175); with neither credentialed, gpt-4o-mini at $0.2625 is next.
+    const r = resolveTier('cheap', [cfg('openai', 'gpt-4o'), cfg('anthropic', 'claude-sonnet-5')]);
     assert.equal(r.vendor, 'openai');
     assert.equal(r.model, 'gpt-4o-mini');
+  });
+
+  // Two models at an identical blended price must not be separated by their
+  // order in the catalog literal. deepseek-v4-flash and gemini-2.5-flash-lite
+  // both blend to $0.175; the declared tie-break is cheaper output first.
+  it('breaks a blended-price tie by a declared rule, not by catalog order', () => {
+    const both = [cfg('google', 'g'), cfg('deepseek', 'd')];
+    assert.equal(resolveTier('cheap', both).model, 'deepseek-v4-flash');
+    assert.equal(
+      blendedPrice(CATALOG['deepseek-v4-flash']),
+      blendedPrice(CATALOG['gemini-2.5-flash-lite']),
+      'the tie this test guards has stopped being a tie',
+    );
   });
 
   it('resolves cheap to Anthropic only when nothing cheaper is credentialed', () => {
@@ -52,28 +66,28 @@ describe('cross-vendor tier resolution', () => {
 
   // Frontier is single-vendor today. That must be visible, not silently patched.
   it('downgrades and says so when a tier has no credentialed vendor', () => {
-    const r = resolveTier('frontier', [cfg('deepseek', 'deepseek-chat')]);
+    const r = resolveTier('frontier', [cfg('deepseek', 'deepseek-v4-flash')]);
     assert.equal(r.downgradedFrom, 'frontier');
     assert.notEqual(r.tier, 'frontier');
   });
 
   it('honours an env override', () => {
-    process.env.BOARDROOM_TIER_CHEAP = 'deepseek:deepseek-chat';
-    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'gemini-2.0-flash')]);
-    assert.equal(r.model, 'deepseek-chat');
+    process.env.BOARDROOM_TIER_CHEAP = 'deepseek:deepseek-v4-flash';
+    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'gemini-2.5-flash-lite')]);
+    assert.equal(r.model, 'deepseek-v4-flash');
     assert.match(r.reason, /BOARDROOM_TIER_CHEAP/);
   });
 
   it('lets an explicit pin beat the env override', () => {
-    process.env.BOARDROOM_TIER_CHEAP = 'deepseek:deepseek-chat';
-    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'y')], {}, 'google:gemini-2.0-flash');
+    process.env.BOARDROOM_TIER_CHEAP = 'deepseek:deepseek-v4-flash';
+    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'y')], {}, 'google:gemini-2.5-flash-lite');
     assert.equal(r.vendor, 'google');
     assert.equal(r.reason, 'pinned by flag');
   });
 
   it('rejects a pin for a vendor with no credentials', () => {
     assert.throws(
-      () => resolveTier('cheap', [cfg('google', 'y')], {}, 'deepseek:deepseek-chat'),
+      () => resolveTier('cheap', [cfg('google', 'y')], {}, 'deepseek:deepseek-v4-flash'),
       DelegationError,
     );
   });
@@ -96,8 +110,8 @@ describe('cross-vendor tier resolution', () => {
   it('resolves the tiers the README advertises, at the prices it quotes', () => {
     const configs = [cfg('anthropic', 'a'), cfg('google', 'g')];
     const expected = [
-      ['cheap', 'google', 'gemini-2.0-flash', '0.18'],
-      ['mid', 'google', 'gemini-1.5-pro', '2.19'],
+      ['cheap', 'google', 'gemini-2.5-flash-lite', '0.18'],
+      ['mid', 'google', 'gemini-2.5-pro', '3.44'],
       ['frontier', 'anthropic', 'claude-opus-5', '10.00'],
     ] as const;
 

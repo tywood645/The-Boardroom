@@ -189,8 +189,8 @@ Most work sent to a frontier model does not need one. The problem is knowing whi
 ```
 $ boardroom delegate stats
 === Tier resolution ===
-  cheap    → google/gemini-2.0-flash   $0.18/Mtok blended
-  mid      → google/gemini-1.5-pro     $2.19/Mtok blended
+  cheap    → google/gemini-2.5-flash-lite  $0.18/Mtok blended
+  mid      → google/gemini-2.5-pro         $3.44/Mtok blended
   frontier → anthropic/claude-opus-5  $10.00/Mtok blended
 ```
 
@@ -210,7 +210,7 @@ With Google credentialed, cheap is gemini-flash at `$0.10/$0.40` rather than hai
 boardroom delegate "summarize this changelog"            # classify, dispatch, verify
 boardroom delegate --explain --class code "..."          # show the decision and every attempt
 boardroom delegate --min-tier mid --session-cap 0.25 "..."
-boardroom delegate --model deepseek:deepseek-chat "..."  # pin one model, no escalation
+boardroom delegate --model deepseek:deepseek-v4-flash "..."  # pin one model, no escalation
 boardroom delegate stats                                 # what each tier resolves to, and how it has been doing
 ```
 

@@ -29,7 +29,7 @@ describe('CostTracker', () => {
   it('accumulates session stats across calls', () => {
     const tracker = new CostTracker();
     tracker.recordUsage('gpt-4o', 100, 50);
-    tracker.recordUsage('deepseek-chat', 200, 100);
+    tracker.recordUsage('deepseek-v4-flash', 200, 100);
     const stats = tracker.getSessionStats();
     assert.equal(stats.inputTokens, 300);
     assert.equal(stats.outputTokens, 150);

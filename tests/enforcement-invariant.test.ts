@@ -79,12 +79,22 @@ describe('enforcement invariants', () => {
 
   // Retired models fail outright rather than costing the wrong amount, so a
   // retired row is worse than a mispriced one: resolveTier picks from this
-  // table, and would hand back a model no request can reach. Sonnet 4 and
-  // Opus 4 were both listed here until they had been dead for six weeks.
+  // table, and would hand back a model no request can reach.
+  //
+  // This is the catalog's most common failure by far. Every ID below was in
+  // the table while already dead, across four vendors -- and because
+  // resolveTier ranks by price, a cheap dead model wins its tier outright.
+  // Sonnet 4 and Opus 4 were six weeks past retirement, gemini-2.0-flash two
+  // months, grok-3 ten weeks; deepseek-chat had been dead four days.
   it('lists no model that has been retired from the API', () => {
     const retired = [
       'claude-opus-4-20250514',
       'claude-sonnet-4-20250514',
+      'gemini-2.0-flash',
+      'gemini-1.5-pro',
+      'deepseek-chat',
+      'grok-3',
+      'grok-3-mini',
       'claude-3-7-sonnet-20250219',
       'claude-3-5-haiku-20241022',
       'claude-3-haiku-20240307',
