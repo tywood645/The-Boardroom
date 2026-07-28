@@ -22,71 +22,47 @@ export function createProvider(config: ProviderConfig): LLMProvider {
   });
 }
 
+/**
+ * The six board seats, one per vendor.
+ *
+ * Every seat's model can be overridden with BOARDROOM_<VENDOR>_MODEL, so a new
+ * release never needs a code change and nobody is stuck on whatever was
+ * current when this table was last edited. The defaults are a starting point,
+ * not a constraint: they are simply each vendor's current generation, and the
+ * override is checked first.
+ *
+ * Only BOARDROOM_ANTHROPIC_MODEL used to be honoured; the other five seats
+ * were hardcoded, which made a stale default here impossible to work around
+ * without editing source.
+ */
+const KEY_SEATS = [
+  { name: 'anthropic', type: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY', model: 'claude-sonnet-5' },
+  { name: 'openai', type: 'openai', keyEnv: 'OPENAI_API_KEY', model: 'gpt-5.6-terra', baseUrl: 'https://api.openai.com/v1' },
+  { name: 'xai', type: 'openai', keyEnv: 'XAI_API_KEY', model: 'grok-4.5', baseUrl: 'https://api.x.ai/v1' },
+  { name: 'google', type: 'openai', keyEnv: 'GOOGLE_API_KEY', model: 'gemini-3.6-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  { name: 'deepseek', type: 'openai', keyEnv: 'DEEPSEEK_API_KEY', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1' },
+  { name: 'perplexity', type: 'openai', keyEnv: 'PERPLEXITY_API_KEY', model: 'sonar-pro', baseUrl: 'https://api.perplexity.ai' },
+] as const;
+
+/** The env var that overrides a seat's model, e.g. BOARDROOM_GOOGLE_MODEL. */
+export function seatModelEnv(vendor: string): string {
+  return `BOARDROOM_${vendor.toUpperCase()}_MODEL`;
+}
+
 function detectKeyProviders(): ProviderConfig[] {
-  const providers: ProviderConfig[] = [];
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    providers.push({
-      name: 'anthropic',
-      type: 'anthropic',
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      // Must be a currently active model: Sonnet 4 was retired on 2026-06-15
-      // and every request to it now fails.
-      model: process.env.BOARDROOM_ANTHROPIC_MODEL || 'claude-sonnet-5',
-    });
-  }
-
-  if (process.env.OPENAI_API_KEY) {
-    providers.push({
-      name: 'openai',
-      type: 'openai',
-      apiKey: process.env.OPENAI_API_KEY,
-      model: 'gpt-5.6-terra', // gpt-4o is four generations behind
-      baseUrl: 'https://api.openai.com/v1',
-    });
-  }
-
-  if (process.env.XAI_API_KEY) {
-    providers.push({
-      name: 'xai',
-      type: 'openai',
-      apiKey: process.env.XAI_API_KEY,
-      model: 'grok-4.5', // current flagship; grok-3 was retired 2026-05-15
-      baseUrl: 'https://api.x.ai/v1',
-    });
-  }
-
-  if (process.env.GOOGLE_API_KEY) {
-    providers.push({
-      name: 'google',
-      type: 'openai',
-      apiKey: process.env.GOOGLE_API_KEY,
-      model: 'gemini-3.6-flash', // current generation; 2.0-flash was shut down 2026-06-01
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    });
-  }
-
-  if (process.env.DEEPSEEK_API_KEY) {
-    providers.push({
-      name: 'deepseek',
-      type: 'openai',
-      apiKey: process.env.DEEPSEEK_API_KEY,
-      model: 'deepseek-v4-pro', // the capable v4; deepseek-chat was retired 2026-07-24
-      baseUrl: 'https://api.deepseek.com/v1',
-    });
-  }
-
-  if (process.env.PERPLEXITY_API_KEY) {
-    providers.push({
-      name: 'perplexity',
-      type: 'openai',
-      apiKey: process.env.PERPLEXITY_API_KEY,
-      model: 'sonar-pro',
-      baseUrl: 'https://api.perplexity.ai',
-    });
-  }
-
-  return providers;
+  return KEY_SEATS.flatMap((seat): ProviderConfig[] => {
+    const apiKey = process.env[seat.keyEnv];
+    if (!apiKey) return [];
+    return [
+      {
+        name: seat.name,
+        type: seat.type,
+        apiKey,
+        model: process.env[seatModelEnv(seat.name)] || seat.model,
+        ...('baseUrl' in seat ? { baseUrl: seat.baseUrl } : {}),
+      },
+    ];
+  });
 }
 
 // ---------------------------------------------------------------------------

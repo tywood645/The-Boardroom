@@ -198,6 +198,8 @@ Add an OpenAI key to that same setup and cheap resolves to `gpt-5-nano` at `$0.0
 
 The catalog carries current-generation models only. "Still has a published price" and "is current" are different questions: `gpt-4o` is four generations behind and still sells. Answering only the first is how the table came to hold seven models that were retired, shut down, or superseded.
 
+Nothing here is a constraint, though. Every board seat takes `BOARDROOM_<VENDOR>_MODEL` (`BOARDROOM_OPENAI_MODEL`, `BOARDROOM_GOOGLE_MODEL`, and so on for all six), and the delegator takes `--model vendor:model` or `BOARDROOM_TIER_<TIER>`. Any of those accept a model string the catalog has never heard of: it is dispatched normally and priced at the warned default. So a model released tomorrow is usable today, and a stale default here is a nuisance rather than a wall.
+
 **Escalation is bought, not spent by default.** The cheapest capable tier is attempted first; a checker at the *same* tier on a *different vendor* tries to refute it; only a concretely named defect buys a more expensive attempt. A cheap answer therefore costs roughly one more cheap call to check, not a frontier call — and the check comes from a model with genuinely different priors, where a larger sibling from the same family tends to share the blind spot that produced the error. Three loop-safety rules matter:
 
 - A `REFUTED` that names no defect is treated as `CONFIRMED`. Otherwise a model that reflexively refuses to approve anything drives the ladder to the most expensive tier for free.
