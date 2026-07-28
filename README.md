@@ -189,12 +189,14 @@ Most work sent to a frontier model does not need one. The problem is knowing whi
 ```
 $ boardroom delegate stats
 === Tier resolution ===
-  cheap    → google/gemini-2.5-flash-lite  $0.18/Mtok blended
-  mid      → google/gemini-2.5-pro         $3.44/Mtok blended
-  frontier → anthropic/claude-opus-5  $10.00/Mtok blended
+  cheap    → google/gemini-3.1-flash-lite  $0.56/Mtok blended
+  mid      → google/gemini-3.6-flash       $3.00/Mtok blended
+  frontier → anthropic/claude-opus-5       $10.00/Mtok blended
 ```
 
-With Google credentialed, cheap is gemini-flash at `$0.10/$0.40` rather than haiku at `$1.00/$5.00` — over 10x on identical work. A tier with no reachable vendor downgrades and reports `downgradedFrom` rather than failing or silently substituting — `frontier` is single-vendor today, and that should be visible.
+Add an OpenAI key to that same setup and cheap resolves to `gpt-5-nano` at `$0.05/$0.40` instead — against haiku's `$1.00/$5.00`, over 10x on identical work. A tier with no reachable vendor downgrades and reports `downgradedFrom` rather than failing or silently substituting.
+
+The catalog carries current-generation models only. "Still has a published price" and "is current" are different questions: `gpt-4o` is four generations behind and still sells. Answering only the first is how the table came to hold seven models that were retired, shut down, or superseded.
 
 **Escalation is bought, not spent by default.** The cheapest capable tier is attempted first; a checker at the *same* tier on a *different vendor* tries to refute it; only a concretely named defect buys a more expensive attempt. A cheap answer therefore costs roughly one more cheap call to check, not a frontier call — and the check comes from a model with genuinely different priors, where a larger sibling from the same family tends to share the blind spot that produced the error. Three loop-safety rules matter:
 

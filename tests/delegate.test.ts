@@ -13,9 +13,9 @@ import type { ProviderConfig } from '../src/provider/factory.ts';
 
 // Three vendors so every tier has a distinct model and a distinct checker.
 const CONFIGS: ProviderConfig[] = [
-  { name: 'google', type: 'openai', apiKey: 'k', model: 'gemini-2.5-flash-lite', baseUrl: 'https://google.test/v1' },
+  { name: 'google', type: 'openai', apiKey: 'k', model: 'gemini-3.1-flash-lite', baseUrl: 'https://google.test/v1' },
   { name: 'deepseek', type: 'openai', apiKey: 'k', model: 'deepseek-v4-flash', baseUrl: 'https://deepseek.test/v1' },
-  { name: 'openai', type: 'openai', apiKey: 'k', model: 'gpt-4o', baseUrl: 'https://openai.test/v1' },
+  { name: 'openai', type: 'openai', apiKey: 'k', model: 'gpt-5.6-terra', baseUrl: 'https://openai.test/v1' },
   { name: 'anthropic', type: 'anthropic', apiKey: 'k', model: 'claude-opus-5' },
 ];
 
@@ -228,7 +228,7 @@ describe('delegation ledger and measured tiers', () => {
   function rec(over: Partial<DelegationRecord> = {}): DelegationRecord {
     return {
       v: 1, ts: new Date().toISOString(), runId: 'r', attempt: 0,
-      cls: 'summarize', tier: 'cheap', vendor: 'google', model: 'gemini-2.5-flash-lite',
+      cls: 'summarize', tier: 'cheap', vendor: 'google', model: 'gemini-3.1-flash-lite',
       inputTokens: 10, outputTokens: 5, cost: 0.001, latencyMs: 100, ttfbMs: 50,
       outcome: 'confirmed',
       ...over,

@@ -28,34 +28,39 @@ describe('cross-vendor tier resolution', () => {
   });
 
   // The point of the exercise: a tier is a price band, not a model alias.
-  // With Google credentialed, cheap is gemini-flash at $0.10/$0.40 rather than
+  // With OpenAI credentialed, cheap is gpt-5-nano at $0.05/$0.40 rather than
   // haiku at $1.00/$5.00 — over 10x on identical work.
   it('picks the cheapest credentialed vendor for a tier, across vendors', () => {
-    const configs = [cfg('anthropic', 'claude-sonnet-5'), cfg('google', 'gemini-2.5-flash-lite')];
+    const configs = [cfg('anthropic', 'a'), cfg('google', 'g'), cfg('openai', 'o')];
     const r = resolveTier('cheap', configs);
-    assert.equal(r.vendor, 'google');
-    assert.equal(r.model, 'gemini-2.5-flash-lite');
+    assert.equal(r.vendor, 'openai');
+    assert.equal(r.model, 'gpt-5-nano');
   });
 
   it('falls to the next cheapest when the cheapest vendor has no credentials', () => {
-    // Google and DeepSeek own the two cheapest cheap-tier models (both blend to
-    // $0.175); with neither credentialed, gpt-4o-mini at $0.2625 is next.
-    const r = resolveTier('cheap', [cfg('openai', 'gpt-4o'), cfg('anthropic', 'claude-sonnet-5')]);
-    assert.equal(r.vendor, 'openai');
-    assert.equal(r.model, 'gpt-4o-mini');
+    // OpenAI and DeepSeek own the two cheapest cheap-tier models; with neither
+    // credentialed, Google's gemini-3.1-flash-lite at $0.5625 is next.
+    const r = resolveTier('cheap', [cfg('google', 'g'), cfg('anthropic', 'a')]);
+    assert.equal(r.vendor, 'google');
+    assert.equal(r.model, 'gemini-3.1-flash-lite');
   });
 
   // Two models at an identical blended price must not be separated by their
-  // order in the catalog literal. deepseek-v4-flash and gemini-2.5-flash-lite
-  // both blend to $0.175; the declared tie-break is cheaper output first.
+  // order in the catalog literal. grok-4.5 and gemini-3.6-flash both blend to
+  // $3.00; the declared tie-break is cheaper output first, which grok wins
+  // ($6.00 against $7.50).
   it('breaks a blended-price tie by a declared rule, not by catalog order', () => {
-    const both = [cfg('google', 'g'), cfg('deepseek', 'd')];
-    assert.equal(resolveTier('cheap', both).model, 'deepseek-v4-flash');
     assert.equal(
-      blendedPrice(CATALOG['deepseek-v4-flash']),
-      blendedPrice(CATALOG['gemini-2.5-flash-lite']),
+      blendedPrice(CATALOG['grok-4.5']),
+      blendedPrice(CATALOG['gemini-3.6-flash']),
       'the tie this test guards has stopped being a tie',
     );
+    // grok-4.3 is cheaper still ($1.56) and would win outright, so exclude it
+    // to put the two tied models directly against each other.
+    const r = resolveTier('mid', [cfg('google', 'g'), cfg('xai', 'x')], {
+      exclude: ['xai:grok-4.3'],
+    });
+    assert.equal(r.model, 'grok-4.5');
   });
 
   it('resolves cheap to Anthropic only when nothing cheaper is credentialed', () => {
@@ -64,7 +69,7 @@ describe('cross-vendor tier resolution', () => {
     assert.equal(r.model, 'claude-haiku-4-5-20251001');
   });
 
-  // Frontier is single-vendor today. That must be visible, not silently patched.
+  // A tier with no reachable vendor must say so, not silently substitute.
   it('downgrades and says so when a tier has no credentialed vendor', () => {
     const r = resolveTier('frontier', [cfg('deepseek', 'deepseek-v4-flash')]);
     assert.equal(r.downgradedFrom, 'frontier');
@@ -73,14 +78,14 @@ describe('cross-vendor tier resolution', () => {
 
   it('honours an env override', () => {
     process.env.BOARDROOM_TIER_CHEAP = 'deepseek:deepseek-v4-flash';
-    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'gemini-2.5-flash-lite')]);
+    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'gemini-3.1-flash-lite')]);
     assert.equal(r.model, 'deepseek-v4-flash');
     assert.match(r.reason, /BOARDROOM_TIER_CHEAP/);
   });
 
   it('lets an explicit pin beat the env override', () => {
     process.env.BOARDROOM_TIER_CHEAP = 'deepseek:deepseek-v4-flash';
-    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'y')], {}, 'google:gemini-2.5-flash-lite');
+    const r = resolveTier('cheap', [cfg('deepseek', 'x'), cfg('google', 'y')], {}, 'google:gemini-3.1-flash-lite');
     assert.equal(r.vendor, 'google');
     assert.equal(r.reason, 'pinned by flag');
   });
@@ -110,8 +115,8 @@ describe('cross-vendor tier resolution', () => {
   it('resolves the tiers the README advertises, at the prices it quotes', () => {
     const configs = [cfg('anthropic', 'a'), cfg('google', 'g')];
     const expected = [
-      ['cheap', 'google', 'gemini-2.5-flash-lite', '0.18'],
-      ['mid', 'google', 'gemini-2.5-pro', '3.44'],
+      ['cheap', 'google', 'gemini-3.1-flash-lite', '0.56'],
+      ['mid', 'google', 'gemini-3.6-flash', '3.00'],
       ['frontier', 'anthropic', 'claude-opus-5', '10.00'],
     ] as const;
 

@@ -41,7 +41,7 @@ function detectKeyProviders(): ProviderConfig[] {
       name: 'openai',
       type: 'openai',
       apiKey: process.env.OPENAI_API_KEY,
-      model: 'gpt-4o',
+      model: 'gpt-5.6-terra', // gpt-4o is four generations behind
       baseUrl: 'https://api.openai.com/v1',
     });
   }
@@ -51,7 +51,7 @@ function detectKeyProviders(): ProviderConfig[] {
       name: 'xai',
       type: 'openai',
       apiKey: process.env.XAI_API_KEY,
-      model: 'grok-4.3', // grok-3 was retired 2026-05-15
+      model: 'grok-4.5', // current flagship; grok-3 was retired 2026-05-15
       baseUrl: 'https://api.x.ai/v1',
     });
   }
@@ -61,7 +61,7 @@ function detectKeyProviders(): ProviderConfig[] {
       name: 'google',
       type: 'openai',
       apiKey: process.env.GOOGLE_API_KEY,
-      model: 'gemini-2.5-flash-lite', // gemini-2.0-flash was shut down 2026-06-01
+      model: 'gemini-3.6-flash', // current generation; 2.0-flash was shut down 2026-06-01
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     });
   }
@@ -71,7 +71,7 @@ function detectKeyProviders(): ProviderConfig[] {
       name: 'deepseek',
       type: 'openai',
       apiKey: process.env.DEEPSEEK_API_KEY,
-      model: 'deepseek-v4-flash', // deepseek-chat was retired 2026-07-24
+      model: 'deepseek-v4-pro', // the capable v4; deepseek-chat was retired 2026-07-24
       baseUrl: 'https://api.deepseek.com/v1',
     });
   }

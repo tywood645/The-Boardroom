@@ -93,7 +93,7 @@ export function anthropicSSE(text: string, opts: { model?: string; inputTokens?:
 
 /** Build an OpenAI-style SSE response from a text string. */
 export function openaiSSE(text: string, opts: { model?: string; inputTokens?: number; outputTokens?: number } = {}): Response {
-  const model = opts.model ?? 'gpt-4o';
+  const model = opts.model ?? 'gpt-5.6-terra';
   const inputTokens = opts.inputTokens ?? 42;
   const outputTokens = opts.outputTokens ?? 10;
 
@@ -113,7 +113,7 @@ export function openaiSSE(text: string, opts: { model?: string; inputTokens?: nu
  * Some vendors just close the socket; the stream must still yield both counts.
  */
 export function openaiSSENoDone(text: string, opts: { model?: string; inputTokens?: number; outputTokens?: number } = {}): Response {
-  const model = opts.model ?? 'gpt-4o';
+  const model = opts.model ?? 'gpt-5.6-terra';
   const inputTokens = opts.inputTokens ?? 42;
   const outputTokens = opts.outputTokens ?? 10;
 
@@ -154,7 +154,7 @@ export function streamingResponse(chunks: string[], opts: { errorAfter?: number;
 }
 
 /** One OpenAI-style SSE data line. */
-export function openaiLine(delta: Record<string, unknown>, model = 'gpt-4o'): string {
+export function openaiLine(delta: Record<string, unknown>, model = 'gpt-5.6-terra'): string {
   return `data: ${JSON.stringify({ id: 'chatcmpl-mock', model, choices: [{ index: 0, delta }] })}\n`;
 }
 

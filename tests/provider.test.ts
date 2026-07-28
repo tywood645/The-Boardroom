@@ -44,11 +44,11 @@ describe('OpenAI-compat streaming', () => {
     onFetch(() => openaiSSE('COO operations advice'));
 
     const p = createProvider({
-      name: 'openai', type: 'openai', apiKey: 'k', model: 'gpt-4o', baseUrl: 'https://api.openai.com/v1',
+      name: 'openai', type: 'openai', apiKey: 'k', model: 'gpt-5.6-terra', baseUrl: 'https://api.openai.com/v1',
     });
     let text = '';
     for await (const ev of p.createMessage({
-      system: 'test', messages: [{ role: 'user', content: 'hi' }], tools: [], maxTokens: 100, model: 'gpt-4o',
+      system: 'test', messages: [{ role: 'user', content: 'hi' }], tools: [], maxTokens: 100, model: 'gpt-5.6-terra',
     })) {
       if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') text += ev.delta.text;
     }

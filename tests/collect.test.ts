@@ -26,7 +26,7 @@ const OPENAI_CFG = {
   name: 'openai',
   type: 'openai' as const,
   apiKey: 'test',
-  model: 'gpt-4o',
+  model: 'gpt-5.6-terra',
   baseUrl: 'https://api.openai.com/v1',
 };
 
@@ -42,7 +42,7 @@ const PARAMS = {
   messages: [{ role: 'user' as const, content: 'hello' }],
   tools: [],
   maxTokens: 64,
-  model: 'gpt-4o',
+  model: 'gpt-5.6-terra',
 };
 
 describe('collectStream token accounting', () => {
@@ -90,8 +90,8 @@ describe('collectStream token accounting', () => {
   it('computes cost at collection time, not at render time', async () => {
     onFetch(() => openaiSSE('hi', { inputTokens: 1000, outputTokens: 1000 }));
     const r = await collectStream(createProvider(OPENAI_CFG), PARAMS);
-    // gpt-4o: (1000*2.50 + 1000*10.0)/1M
-    assert.ok(Math.abs(r.cost - 0.0125) < 1e-9, `got ${r.cost}`);
+    // gpt-5.6-terra: (1000*2.50 + 1000*15.0)/1M
+    assert.ok(Math.abs(r.cost - 0.0175) < 1e-9, `got ${r.cost}`);
   });
 });
 
@@ -279,7 +279,7 @@ describe('CostTracker write batching', () => {
     const usagePath = join(tmpDir, '.boardroom', 'usage.json');
     const tracker = new CostTracker();
 
-    for (let i = 0; i < 20; i++) tracker.recordUsage('gpt-4o', 100, 50);
+    for (let i = 0; i < 20; i++) tracker.recordUsage('gpt-5.6-terra', 100, 50);
     assert.equal(existsSync(usagePath), false, 'recordUsage must not touch disk');
 
     tracker.flush();
@@ -289,7 +289,7 @@ describe('CostTracker write batching', () => {
 
   it('counts pending entries in daily spend before they are flushed', () => {
     const tracker = new CostTracker();
-    tracker.recordUsage('gpt-4o', 1000, 1000);
+    tracker.recordUsage('gpt-5.6-terra', 1000, 1000);
     assert.ok(tracker.getDailySpend() > 0, 'caps must see spend that is not yet on disk');
   });
 });

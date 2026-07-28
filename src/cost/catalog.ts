@@ -30,39 +30,39 @@ export const CATALOG: Record<string, ModelSpec> = {
   // standard rate is listed instead, because the budget gate reserves against
   // this table: pricing the discount would under-reserve today and silently
   // stop being wrong when the discount lapses.
-  // Only models that are currently active. Claude Opus 4 and Sonnet 4 were
-  // retired on 2026-06-15 and now fail outright, so listing them would let
-  // resolveTier hand back a model that cannot be called at all -- a worse
-  // version of the mispricing this table exists to prevent.
+  // Current generation only. "Still has a published price" is not the same
+  // question as "is current" -- gpt-4o is four generations behind and still
+  // sells -- and answering only the first is how this table filled up with
+  // models nobody should be routed to.
   'claude-opus-5': { vendor: 'anthropic', input: 5.0, output: 25.0, tier: 'frontier' },
-  'claude-sonnet-5': { vendor: 'anthropic', input: 3.0, output: 15.0, tier: 'mid' },
   'claude-fable-5': { vendor: 'anthropic', input: 10.0, output: 50.0, tier: 'frontier' },
+  'claude-sonnet-5': { vendor: 'anthropic', input: 3.0, output: 15.0, tier: 'mid' },
   'claude-haiku-4-5-20251001': { vendor: 'anthropic', input: 1.0, output: 5.0, tier: 'cheap' },
 
-  // ── OpenAI ──
-  'gpt-4o': { vendor: 'openai', input: 2.50, output: 10.0, tier: 'mid' },
-  'gpt-4o-mini': { vendor: 'openai', input: 0.15, output: 0.60, tier: 'cheap' },
+  // ── OpenAI ── (5.6 is the current generation; 5.6-sol is the flagship)
+  'gpt-5.6-sol': { vendor: 'openai', input: 5.0, output: 30.0, tier: 'frontier' },
+  'gpt-5.6-terra': { vendor: 'openai', input: 2.50, output: 15.0, tier: 'mid' },
+  'gpt-5.6-luna': { vendor: 'openai', input: 1.0, output: 6.0, tier: 'mid' },
+  'gpt-5-nano': { vendor: 'openai', input: 0.05, output: 0.40, tier: 'cheap' },
 
-  // ── xAI ──
-  // grok-3 was retired on 2026-05-15 and grok-3-mini is absent from every
-  // current xAI page. Requests to the retired slug are billed at grok-4.3's
-  // rates, not the old ones, so the entry was wrong even for callers it
-  // still appeared to work for.
+  // ── xAI ── (grok-3 was retired 2026-05-15; 4.5 is the current flagship)
+  'grok-4.5': { vendor: 'xai', input: 2.0, output: 6.0, tier: 'mid' },
   'grok-4.3': { vendor: 'xai', input: 1.25, output: 2.50, tier: 'mid' },
 
-  // ── Google ──
-  // gemini-2.0-flash was shut down 2026-06-01 and gemini-1.5-pro is gone from
-  // Google's docs entirely. flash-lite is the current cheap class and happens
-  // to carry the same $0.10/$0.40 the dead 2.0-flash did.
-  'gemini-2.5-flash-lite': { vendor: 'google', input: 0.10, output: 0.40, tier: 'cheap' },
-  'gemini-2.5-pro': { vendor: 'google', input: 1.25, output: 10.0, tier: 'mid' },
+  // ── Google ── (2.0-flash was shut down 2026-06-01; 3.x is current)
+  'gemini-3.6-flash': { vendor: 'google', input: 1.50, output: 7.50, tier: 'mid' },
+  'gemini-3.1-flash-lite': { vendor: 'google', input: 0.25, output: 1.50, tier: 'cheap' },
 
-  // ── DeepSeek ──
-  // deepseek-chat was retired on 2026-07-24. Input is the cache-MISS rate;
-  // the cache-hit rate is ~50x lower and would badly under-reserve.
+  // ── DeepSeek ── (deepseek-chat was retired 2026-07-24; v4 is current)
+  // Input is the cache-MISS rate; the cache-hit rate is ~50x lower and would
+  // badly under-reserve.
+  'deepseek-v4-pro': { vendor: 'deepseek', input: 0.435, output: 0.87, tier: 'mid' },
   'deepseek-v4-flash': { vendor: 'deepseek', input: 0.14, output: 0.28, tier: 'cheap' },
 
   // ── Perplexity ──
+  // Token rates only. Perplexity also bills $6/$10/$14 per 1,000 requests by
+  // search_context_size, which nothing here models, so a search-heavy run
+  // costs more than this table can predict.
   'sonar-pro': { vendor: 'perplexity', input: 3.0, output: 15.0, tier: 'mid' },
 };
 
@@ -134,10 +134,11 @@ export function costOf(model: string, inputTokens: number, outputTokens: number)
  * while walking uphill in capability, which is exactly what it should do when
  * a vendor prices a strong model cheaply.
  *
- * Known limitation: gemini-2.5-pro and grok-4.3 are priced by context length
- * (both roughly double above a 200k-token prompt, and xAI reprices every token
- * in the request rather than just the overflow). Only the base tier is
- * modelled, so the budget gate under-reserves for very large prompts.
+ * Known limitation: the grok models are priced by context length, doubling
+ * above a 200k-token prompt, and xAI reprices every token in the request
+ * rather than just the overflow. OpenAI likewise quotes these as its "short
+ * context" rates. Only the base tier is modelled, so the budget gate
+ * under-reserves for very large prompts.
  */
 export function blendedPrice(spec: ModelSpec): number {
   return (spec.input * 3 + spec.output) / 4;
@@ -146,8 +147,8 @@ export function blendedPrice(spec: ModelSpec): number {
 /**
  * Models in a tier, cheapest first, under a total order.
  *
- * Ties are real and not hypothetical: gemini-2.5-flash-lite ($0.10/$0.40) and
- * deepseek-v4-flash ($0.14/$0.28) blend to exactly $0.175. Sorting on blended
+ * Ties are real and not hypothetical: grok-4.5 ($2.00/$6.00) and
+ * gemini-3.6-flash ($1.50/$7.50) blend to exactly $3.00. Sorting on blended
  * price alone leaves the winner to be decided by which line sits higher in the
  * CATALOG literal, which would make a routing decision an artifact of file
  * layout -- measured-looking, arbitrary in fact.
