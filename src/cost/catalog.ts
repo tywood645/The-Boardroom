@@ -22,15 +22,20 @@ export interface ModelSpec {
 
 export const CATALOG: Record<string, ModelSpec> = {
   // ── Anthropic ──
-  // The 5-family rates below are carried forward from the equivalent 4.x tier and
-  // are not independently verified. Override with BOARDROOM_PRICING_FILE if the
-  // published rates differ; priceFor() warns whenever it falls back to a default.
-  'claude-opus-5': { vendor: 'anthropic', input: 15.0, output: 75.0, tier: 'frontier' },
+  // The 5-family rates are the published ones, not the 4.x rates they were
+  // briefly assumed to match: the 5-family Opus tier is a third of Opus 4's
+  // price, and Haiku 4.5 is more expensive than the 3.5 rate it inherited.
+  //
+  // Sonnet 5 carries an introductory $2.00/$10.00 through 2026-08-31. The
+  // standard rate is listed instead, because the budget gate reserves against
+  // this table: pricing the discount would under-reserve today and silently
+  // stop being wrong when the discount lapses.
+  'claude-opus-5': { vendor: 'anthropic', input: 5.0, output: 25.0, tier: 'frontier' },
   'claude-sonnet-5': { vendor: 'anthropic', input: 3.0, output: 15.0, tier: 'mid' },
-  'claude-fable-5': { vendor: 'anthropic', input: 15.0, output: 75.0, tier: 'frontier' },
+  'claude-fable-5': { vendor: 'anthropic', input: 10.0, output: 50.0, tier: 'frontier' },
   'claude-opus-4-20250514': { vendor: 'anthropic', input: 15.0, output: 75.0, tier: 'frontier' },
   'claude-sonnet-4-20250514': { vendor: 'anthropic', input: 3.0, output: 15.0, tier: 'mid' },
-  'claude-haiku-4-5-20251001': { vendor: 'anthropic', input: 0.80, output: 4.0, tier: 'cheap' },
+  'claude-haiku-4-5-20251001': { vendor: 'anthropic', input: 1.0, output: 5.0, tier: 'cheap' },
 
   // ── OpenAI ──
   'gpt-4o': { vendor: 'openai', input: 2.50, output: 10.0, tier: 'mid' },
@@ -51,6 +56,26 @@ export const CATALOG: Record<string, ModelSpec> = {
   'sonar-pro': { vendor: 'perplexity', input: 3.0, output: 15.0, tier: 'mid' },
 };
 
+/**
+ * Undated aliases for catalog entries keyed by their dated ID. Anthropic accepts
+ * both spellings, so a config naming the alias would otherwise be priced by the
+ * fallback — for Haiku that is a 3x overcharge on every recorded call.
+ *
+ * These are deliberately kept out of CATALOG: modelsInTier() ranks whatever it
+ * finds there, and two rows for one model at an identical price would make tier
+ * resolution depend on object key order.
+ */
+const ALIASES: Record<string, string> = {
+  'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
+  'claude-opus-4-0': 'claude-opus-4-20250514',
+  'claude-sonnet-4-0': 'claude-sonnet-4-20250514',
+};
+
+/** Resolve an alias to its catalog key; returns the input if it is already one. */
+export function canonicalModel(model: string): string {
+  return ALIASES[model] ?? model;
+}
+
 /** Applied to any model absent from the catalog. Deliberately pessimistic. */
 export const DEFAULT_PRICING = { input: 3.0, output: 15.0 };
 
@@ -66,7 +91,7 @@ export function isFree(model: string): boolean {
 const warnedUnknown = new Set<string>();
 
 export function priceFor(model: string): { input: number; output: number } {
-  const spec = CATALOG[model];
+  const spec = CATALOG[canonicalModel(model)];
   if (spec) return { input: spec.input, output: spec.output };
   if (isFree(model)) return { input: 0, output: 0 };
   if (!warnedUnknown.has(model)) {
@@ -86,8 +111,15 @@ export function costOf(model: string, inputTokens: number, outputTokens: number)
 
 /**
  * Rank models within a tier. Assumes a representative call is input-heavy at
- * roughly 3 input tokens per output token; ranking is insensitive to the exact
- * ratio because tiers are already an order of magnitude apart.
+ * roughly 3 input tokens per output token.
+ *
+ * Only the ordering within a tier is load-bearing — modelsInTier() filters
+ * before it sorts, so the ratio would have to reorder two models in the same
+ * band to change any decision. It does not: within every band here the spread
+ * is far wider than the ratio's influence. Across bands the numbers do abut
+ * (Haiku 4.5 blends to $2.00, mid-tier gemini-1.5-pro to $2.19), which is why
+ * a tier is defined by the assignment in CATALOG rather than by a price
+ * threshold — bands are capability, priced roughly.
  */
 export function blendedPrice(spec: ModelSpec): number {
   return (spec.input * 3 + spec.output) / 4;

@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveTier, nextTier, DelegationError } from '../src/delegate/tiers.ts';
+import { CATALOG, blendedPrice } from '../src/cost/catalog.ts';
 import { Semaphore } from '../src/util/semaphore.ts';
 import { Deadline } from '../src/util/abort.ts';
 import type { ProviderConfig } from '../src/provider/factory.ts';
@@ -28,7 +29,7 @@ describe('cross-vendor tier resolution', () => {
 
   // The point of the exercise: a tier is a price band, not a model alias.
   // With Google credentialed, cheap is gemini-flash at $0.10/$0.40 rather than
-  // haiku at $0.80/$4.00 — an 8x difference on identical work.
+  // haiku at $1.00/$5.00 — over 10x on identical work.
   it('picks the cheapest credentialed vendor for a tier, across vendors', () => {
     const configs = [cfg('anthropic', 'claude-sonnet-4-20250514'), cfg('google', 'gemini-2.0-flash')];
     const r = resolveTier('cheap', configs);
@@ -87,6 +88,24 @@ describe('cross-vendor tier resolution', () => {
 
   it('throws when nothing is credentialed at all', () => {
     assert.throws(() => resolveTier('cheap', []), DelegationError);
+  });
+
+  // The README quotes this exact resolution and these exact blended prices as
+  // what `delegate stats` prints. Pinning them here means a catalog edit that
+  // changes the advertised output cannot land without updating the docs.
+  it('resolves the tiers the README advertises, at the prices it quotes', () => {
+    const configs = [cfg('anthropic', 'a'), cfg('google', 'g')];
+    const expected = [
+      ['cheap', 'google', 'gemini-2.0-flash', '0.18'],
+      ['mid', 'google', 'gemini-1.5-pro', '2.19'],
+      ['frontier', 'anthropic', 'claude-opus-5', '10.00'],
+    ] as const;
+
+    for (const [tier, vendor, model, blended] of expected) {
+      const r = resolveTier(tier, configs);
+      assert.equal(`${r.vendor}/${r.model}`, `${vendor}/${model}`, tier);
+      assert.equal(blendedPrice(CATALOG[r.model]).toFixed(2), blended, `${tier} blended price`);
+    }
   });
 
   it('walks the ladder in price order', () => {

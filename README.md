@@ -191,10 +191,10 @@ $ boardroom delegate stats
 === Tier resolution ===
   cheap    → google/gemini-2.0-flash   $0.18/Mtok blended
   mid      → google/gemini-1.5-pro     $2.19/Mtok blended
-  frontier → anthropic/claude-opus-5  $30.00/Mtok blended
+  frontier → anthropic/claude-opus-5  $10.00/Mtok blended
 ```
 
-With Google credentialed, cheap is gemini-flash at `$0.10/$0.40` rather than haiku at `$0.80/$4.00`. A tier with no reachable vendor downgrades and reports `downgradedFrom` rather than failing or silently substituting — `frontier` is single-vendor today, and that should be visible.
+With Google credentialed, cheap is gemini-flash at `$0.10/$0.40` rather than haiku at `$1.00/$5.00` — over 10x on identical work. A tier with no reachable vendor downgrades and reports `downgradedFrom` rather than failing or silently substituting — `frontier` is single-vendor today, and that should be visible.
 
 **Escalation is bought, not spent by default.** The cheapest capable tier is attempted first; a checker at the *same* tier on a *different vendor* tries to refute it; only a concretely named defect buys a more expensive attempt. A cheap answer therefore costs roughly one more cheap call to check, not a frontier call — and the check comes from a model with genuinely different priors, where a larger sibling from the same family tends to share the blind spot that produced the error. Three loop-safety rules matter:
 
