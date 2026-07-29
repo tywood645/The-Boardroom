@@ -2,6 +2,7 @@ import type { ProviderConfig } from '../provider/factory.js';
 import { askPanel, PanelistAnswer, Seat } from './panel.js';
 import { roleForVendor, ROLES } from './roles.js';
 import { consultBriefing, applyBriefing, ConsultantBriefing } from './consultant.js';
+import type { RunContext } from '../provider/collect.js';
 
 export interface BoardroomResult {
   question: string;
@@ -39,6 +40,7 @@ export interface BoardroomOptions {
   maxTokens?: number;
   consultant?: boolean;     // default true; false to skip the Consultant briefing entirely
   recall?: string | null;   // PRIOR BOARD CONTEXT block to prepend to the question
+  ctx?: RunContext;         // budget gate, concurrency cap and deadline
 }
 
 export function buildSeats(configs: ProviderConfig[], roundBase: string): Seat[] {
@@ -69,7 +71,9 @@ export async function runBoardroom(
   // Skipped entirely if --no-consultant is set, isolating vendor priors.
   const consultant = configs.find(c => c.name === 'perplexity');
   const briefing =
-    consultantEnabled && consultant ? await consultBriefing(consultant, question) : null;
+    consultantEnabled && consultant
+      ? await consultBriefing(consultant, question, undefined, opts.ctx)
+      : null;
 
   // Step 2: build the briefing-augmented question that every advisor will see.
   // Recall (institutional memory) prefixes everything so advisors read prior
@@ -83,7 +87,7 @@ export async function runBoardroom(
     throw new Error('No seats could be assigned. Check provider names match DEFAULT_ASSIGNMENT in roles.ts.');
   }
 
-  const round1 = await askPanel(round1Seats, augmentedQuestion, maxTokens);
+  const round1 = await askPanel(round1Seats, augmentedQuestion, maxTokens, opts.ctx);
   const result: BoardroomResult = { question, briefing, round1 };
 
   // Step 4: optional round 2, cross-examination.
@@ -99,7 +103,7 @@ export async function runBoardroom(
       `Where do you disagree, and why? Stay in your role.`;
 
     const round2Seats = buildSeats(configs, ROUND2_BASE);
-    result.round2 = await askPanel(round2Seats, round2Question, maxTokens);
+    result.round2 = await askPanel(round2Seats, round2Question, maxTokens, opts.ctx);
   }
 
   return result;

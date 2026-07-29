@@ -3,11 +3,16 @@ import { detectProviders } from './provider/factory.js';
 import { runBoardroom, describeAssignment } from './boardroom/protocol.js';
 import { renderBoardroom } from './boardroom/render.js';
 import { CostTracker } from './cost/tracker.js';
+import { loadBudget, describeBudget } from './cost/config.js';
+import type { RunContext } from './provider/collect.js';
+import { Semaphore } from './util/semaphore.js';
+import { Deadline } from './util/abort.js';
 import { runMotion } from './motion/protocol.js';
 import { renderMotion } from './motion/render.js';
 import { writeMinutes } from './motion/minutes.js';
 import { appendDecision } from './state/store.js';
 import { buildRecallBlock } from './state/format.js';
+import { registerDelegate } from './cli/delegate.js';
 
 export async function main(): Promise<void> {
   const program = new Command()
@@ -23,9 +28,15 @@ export async function main(): Promise<void> {
     .option('--max-tokens <n>', 'Max tokens per panelist response', '1024')
     .option('--no-consultant', 'Skip the Consultant research briefing (isolate vendor priors)')
     .option('--no-recall', 'Skip prior board context (default: load ~/.boardroom/context.md + state.json)')
-    .action(async (questionParts: string[], cmdOpts: { rounds: string; maxTokens: string; consultant: boolean; recall: boolean }) => {
+    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
+    .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
+    .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
+    .option('--concurrency <n>', 'Max provider calls in flight', String(DEFAULT_CONCURRENCY))
+    .option('--deadline <ms>', 'Wall-clock budget for the whole run', String(DEFAULT_DEADLINE_MS))
+    .action(async (questionParts: string[], cmdOpts: RunFlags & { rounds: string; maxTokens: string; consultant: boolean; recall: boolean }) => {
       const question = questionParts.join(' ');
       const configs = ensureConfigs();
+      const { ctx, tracker, deadline } = makeContext(cmdOpts);
       console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
       const rounds = parseInt(cmdOpts.rounds);
       if (rounds !== 1 && rounds !== 2) {
@@ -39,8 +50,12 @@ export async function main(): Promise<void> {
         maxTokens: parseInt(cmdOpts.maxTokens),
         consultant: cmdOpts.consultant,
         recall,
+        ctx,
       });
-      renderBoardroom(result, new CostTracker());
+      renderBoardroom(result);
+      // process.exit skips async teardown, so persist usage before it runs.
+      deadline.dispose();
+      tracker.flush();
       process.exit(0);
     });
 
@@ -51,9 +66,15 @@ export async function main(): Promise<void> {
     .option('--max-tokens <n>', 'Max tokens per phase response', '600')
     .option('--no-consultant', 'Skip the Consultant research briefing')
     .option('--no-recall', 'Skip prior board context (default: load ~/.boardroom/context.md + state.json)')
-    .action(async (textParts: string[], cmdOpts: { maxTokens: string; consultant: boolean; recall: boolean }) => {
+    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
+    .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
+    .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
+    .option('--concurrency <n>', 'Max provider calls in flight', String(DEFAULT_CONCURRENCY))
+    .option('--deadline <ms>', 'Wall-clock budget for the whole run', String(DEFAULT_DEADLINE_MS))
+    .action(async (textParts: string[], cmdOpts: RunFlags & { maxTokens: string; consultant: boolean; recall: boolean }) => {
       const motion = textParts.join(' ');
       const configs = ensureConfigs();
+      const { ctx, tracker, deadline } = makeContext(cmdOpts);
       console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
       console.log('Motion phases: brief → second → debate → vote → minutes');
       const recall = cmdOpts.recall === false ? null : buildRecallBlock();
@@ -63,6 +84,7 @@ export async function main(): Promise<void> {
         maxTokens: parseInt(cmdOpts.maxTokens),
         consultant: cmdOpts.consultant,
         recall,
+        ctx,
       });
       result.minutesPath = writeMinutes(result);
       // Persist this decision into the institutional memory so future
@@ -73,10 +95,50 @@ export async function main(): Promise<void> {
         console.error('Warning: failed to persist decision to state.json:', e?.message || e);
       }
       renderMotion(result);
+      deadline.dispose();
+      tracker.flush();
       process.exit(0);
     });
 
+  // Tiered dispatch. A sibling of the board, not a layer under it: the board
+  // seats one vendor per role to manufacture disagreement, the delegator picks
+  // one model per task to minimise cost. Opposite objectives, separate command.
+  registerDelegate(program);
+
   await program.parseAsync(process.argv);
+}
+
+// The board is six seats, so this preserves today's fan-out exactly while
+// making the cap explicit and adjustable.
+const DEFAULT_CONCURRENCY = 6;
+const DEFAULT_DEADLINE_MS = 120_000;
+
+interface RunFlags {
+  sessionCap?: string;
+  dailyCap?: string;
+  weeklyCap?: string;
+  concurrency?: string;
+  deadline?: string;
+}
+
+function positive(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * Build the limits every provider call in this run will be held to. They are
+ * applied inside collectStream, so no call site can opt out of them.
+ */
+function makeContext(flags: RunFlags): { ctx: RunContext; tracker: CostTracker; deadline: Deadline } {
+  const budget = loadBudget(flags);
+  if (budget.sessionCap || budget.dailyCap || budget.weeklyCap) {
+    console.log('Budget caps: ' + describeBudget(budget));
+  }
+  const tracker = new CostTracker(budget);
+  const limiter = new Semaphore(Math.floor(positive(flags.concurrency, DEFAULT_CONCURRENCY)));
+  const deadline = new Deadline(positive(flags.deadline, DEFAULT_DEADLINE_MS), 'run');
+  return { ctx: { tracker, limiter, signal: deadline.signal }, tracker, deadline };
 }
 
 function ensureConfigs() {

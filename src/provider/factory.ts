@@ -1,7 +1,6 @@
 import { LLMProvider } from './base.js';
 import { AnthropicProvider } from './anthropic.js';
 import { OpenAICompatProvider } from './openai-compat.js';
-import { logger } from '../util/logger.js';
 
 export interface ProviderConfig {
   name: string;
@@ -9,24 +8,6 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   baseUrl?: string;
-}
-
-const MODEL_ALIASES: Record<string, { provider: string; model: string }> = {
-  'opus': { provider: 'anthropic', model: 'claude-opus-4-20250514' },
-  'sonnet': { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
-  'haiku': { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-  'gpt4o': { provider: 'openai', model: 'gpt-4o' },
-  'gpt4o-mini': { provider: 'openai', model: 'gpt-4o-mini' },
-  'grok': { provider: 'xai', model: 'grok-3' },
-  'grok-mini': { provider: 'xai', model: 'grok-3-mini' },
-  'gemini': { provider: 'google', model: 'gemini-2.0-flash' },
-  'gemini-pro': { provider: 'google', model: 'gemini-1.5-pro' },
-  'deepseek': { provider: 'deepseek', model: 'deepseek-chat' },
-  'sonar': { provider: 'perplexity', model: 'sonar-pro' },
-};
-
-export function resolveModelAlias(input: string): string {
-  return MODEL_ALIASES[input]?.model || input;
 }
 
 export function createProvider(config: ProviderConfig): LLMProvider {
@@ -41,73 +22,47 @@ export function createProvider(config: ProviderConfig): LLMProvider {
   });
 }
 
-export function createProviderChain(configs: ProviderConfig[]): LLMProvider[] {
-  return configs.map(c => createProvider(c));
+/**
+ * The six board seats, one per vendor.
+ *
+ * Every seat's model can be overridden with BOARDROOM_<VENDOR>_MODEL, so a new
+ * release never needs a code change and nobody is stuck on whatever was
+ * current when this table was last edited. The defaults are a starting point,
+ * not a constraint: they are simply each vendor's current generation, and the
+ * override is checked first.
+ *
+ * Only BOARDROOM_ANTHROPIC_MODEL used to be honoured; the other five seats
+ * were hardcoded, which made a stale default here impossible to work around
+ * without editing source.
+ */
+const KEY_SEATS = [
+  { name: 'anthropic', type: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY', model: 'claude-sonnet-5' },
+  { name: 'openai', type: 'openai', keyEnv: 'OPENAI_API_KEY', model: 'gpt-5.6-terra', baseUrl: 'https://api.openai.com/v1' },
+  { name: 'xai', type: 'openai', keyEnv: 'XAI_API_KEY', model: 'grok-4.5', baseUrl: 'https://api.x.ai/v1' },
+  { name: 'google', type: 'openai', keyEnv: 'GOOGLE_API_KEY', model: 'gemini-3.6-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  { name: 'deepseek', type: 'openai', keyEnv: 'DEEPSEEK_API_KEY', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1' },
+  { name: 'perplexity', type: 'openai', keyEnv: 'PERPLEXITY_API_KEY', model: 'sonar-pro', baseUrl: 'https://api.perplexity.ai' },
+] as const;
+
+/** The env var that overrides a seat's model, e.g. BOARDROOM_GOOGLE_MODEL. */
+export function seatModelEnv(vendor: string): string {
+  return `BOARDROOM_${vendor.toUpperCase()}_MODEL`;
 }
 
 function detectKeyProviders(): ProviderConfig[] {
-  const providers: ProviderConfig[] = [];
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    providers.push({
-      name: 'anthropic',
-      type: 'anthropic',
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      model: process.env.BOARDROOM_ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
-    });
-  }
-
-  if (process.env.OPENAI_API_KEY) {
-    providers.push({
-      name: 'openai',
-      type: 'openai',
-      apiKey: process.env.OPENAI_API_KEY,
-      model: 'gpt-4o',
-      baseUrl: 'https://api.openai.com/v1',
-    });
-  }
-
-  if (process.env.XAI_API_KEY) {
-    providers.push({
-      name: 'xai',
-      type: 'openai',
-      apiKey: process.env.XAI_API_KEY,
-      model: 'grok-3',
-      baseUrl: 'https://api.x.ai/v1',
-    });
-  }
-
-  if (process.env.GOOGLE_API_KEY) {
-    providers.push({
-      name: 'google',
-      type: 'openai',
-      apiKey: process.env.GOOGLE_API_KEY,
-      model: 'gemini-2.0-flash',
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    });
-  }
-
-  if (process.env.DEEPSEEK_API_KEY) {
-    providers.push({
-      name: 'deepseek',
-      type: 'openai',
-      apiKey: process.env.DEEPSEEK_API_KEY,
-      model: 'deepseek-chat',
-      baseUrl: 'https://api.deepseek.com/v1',
-    });
-  }
-
-  if (process.env.PERPLEXITY_API_KEY) {
-    providers.push({
-      name: 'perplexity',
-      type: 'openai',
-      apiKey: process.env.PERPLEXITY_API_KEY,
-      model: 'sonar-pro',
-      baseUrl: 'https://api.perplexity.ai',
-    });
-  }
-
-  return providers;
+  return KEY_SEATS.flatMap((seat): ProviderConfig[] => {
+    const apiKey = process.env[seat.keyEnv];
+    if (!apiKey) return [];
+    return [
+      {
+        name: seat.name,
+        type: seat.type,
+        apiKey,
+        model: process.env[seatModelEnv(seat.name)] || seat.model,
+        ...('baseUrl' in seat ? { baseUrl: seat.baseUrl } : {}),
+      },
+    ];
+  });
 }
 
 // ---------------------------------------------------------------------------

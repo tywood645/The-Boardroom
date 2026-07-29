@@ -1,6 +1,19 @@
 import chalk from 'chalk';
 import type { MotionResult } from './types.js';
 
+/**
+ * Total spend for a motion. Every phase now carries its own recorded cost, so
+ * this is a sum of already-metered calls rather than a fresh calculation.
+ */
+export function motionCost(r: MotionResult): number {
+  return (
+    (r.briefing?.cost ?? 0) +
+    r.seconds.reduce((n, s) => n + s.cost, 0) +
+    r.debate.reduce((n, d) => n + d.cost, 0) +
+    r.votes.reduce((n, v) => n + v.cost, 0)
+  );
+}
+
 export function renderMotion(r: MotionResult): void {
   console.log(chalk.bold.cyan('\n=== MOTION BEFORE THE BOARD ==='));
   console.log(chalk.italic('"' + r.motion + '"'));
@@ -29,6 +42,7 @@ export function renderMotion(r: MotionResult): void {
   if (r.outcome === 'died_for_lack_of_second') {
     console.log(chalk.bold.red('MOTION DIED FOR LACK OF SECOND.'));
     console.log(chalk.dim('Need at least 2 seconds to proceed to debate.'));
+    console.log(chalk.dim(`Total motion cost: $${motionCost(r).toFixed(4)}`));
     if (r.minutesPath) {
       console.log(chalk.dim('Minutes: ' + r.minutesPath));
     }
@@ -73,6 +87,8 @@ export function renderMotion(r: MotionResult): void {
     chalk.bold.yellow('  MOTION TIED: CHAIR MUST DECIDE  ');
   console.log(banner);
   console.log();
+
+  console.log(chalk.dim(`Total motion cost: $${motionCost(r).toFixed(4)}`));
 
   if (r.minutesPath) {
     console.log(chalk.dim('Minutes saved: ' + r.minutesPath));
