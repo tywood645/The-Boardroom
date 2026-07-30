@@ -9,6 +9,7 @@ import { askPanel, type PanelistAnswer, type Seat } from '../boardroom/panel.js'
 import { buildSeats, ROUND1_BASE } from '../boardroom/protocol.js';
 import { ROLES } from '../boardroom/roles.js';
 import { CostTracker } from '../cost/tracker.js';
+import type { RunContext } from '../provider/collect.js';
 import { selectQuestions, forcedChoiceSuffix, type Category, type EvalQuestion } from './corpus.js';
 import { extractVote } from './extract.js';
 import { scoreQuestion, buildReport, type DivergenceReport, type Vote } from './divergence.js';
@@ -19,6 +20,12 @@ export interface EvalOptions {
   maxTokens?: number;
   /** Vendor name to seat in all six roles. Omit for the real multi-vendor panel. */
   control?: string;
+  /**
+   * Budget gate, concurrency cap and deadline. Threaded through to every
+   * provider call so a 180-call eval cannot bypass the spend limit that the
+   * board itself respects. Omit and the run gets its own tracker.
+   */
+  ctx?: RunContext;
   /** Called after each question so a long run shows progress. */
   onProgress?: (done: number, total: number, questionId: string) => void;
 }
@@ -82,8 +89,13 @@ export async function runEval(
     throw new Error('Need at least 2 seats to measure divergence.');
   }
 
-  const tracker = new CostTracker();
+  // Share the caller's tracker when there is one, so both arms of a --compare
+  // draw down the same budget. Cost is summed per call rather than read from
+  // session totals, so each arm reports only its own spend.
+  const ownsTracker = !opts.ctx?.tracker;
+  const tracker = opts.ctx?.tracker ?? new CostTracker();
   const scores = [];
+  let costUsd = 0;
 
   // Questions run sequentially; the six seats within a question run in
   // parallel. Fanning out across questions too would trip vendor rate limits
@@ -91,10 +103,10 @@ export async function runEval(
   let done = 0;
   for (const question of questions) {
     const prompt = question.prompt + forcedChoiceSuffix(question);
-    const answers = await askPanel(seats, prompt, maxTokens);
+    const answers = await askPanel(seats, prompt, maxTokens, opts.ctx);
 
     for (const a of answers) {
-      if (!a.error) tracker.recordUsage(a.model, a.inputTokens, a.outputTokens);
+      if (!a.error) costUsd += tracker.recordUsage(a.model, a.inputTokens, a.outputTokens).cost;
     }
 
     scores.push(scoreQuestion(question, answers.map(a => toVote(a, question))));
@@ -102,8 +114,9 @@ export async function runEval(
     opts.onProgress?.(done, questions.length, question.id);
   }
 
-  return {
-    report: buildReport(label, seats.length, scores),
-    costUsd: tracker.getSessionStats().cost,
-  };
+  // The CLI flushes the tracker it owns; flush ours so a library caller still
+  // gets the usage log written.
+  if (ownsTracker) tracker.flush();
+
+  return { report: buildReport(label, seats.length, scores), costUsd };
 }

@@ -5,31 +5,38 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  build-and-test:
-    name: Build & test (node ${{ matrix.node }})
+  check:
     runs-on: ubuntu-latest
     strategy:
+      # Report every version's result; a failure on one Node is worth seeing
+      # alongside the others rather than cancelling them.
       fail-fast: false
       matrix:
-        # package.json declares engines.node >= 18, so 18 is tested rather
-        # than assumed. If it breaks here, the engines claim is wrong.
-        node: ['18', '20', '22']
+        node: ['20', '22', '24']
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+
       - run: npm ci
-      - run: npx tsc --noEmit
+
+      # typecheck covers tests/ via tsconfig.test.json; build does not.
+      - run: npm run typecheck
       - run: npm run build
       - run: npm test
 
-  # The eval's value depends on the extractor being deterministic and the
-  # corpus aliases staying disjoint. Both are enforced by tests, but running
-  # them twice catches accidental order- or state-dependence that a single
-  # pass would hide.
+  # The divergence eval is only trustworthy if the extractor is deterministic
+  # and the corpus aliases stay disjoint. Both are asserted by tests, but
+  # running the suite twice catches accidental order- or state-dependence that
+  # a single pass would hide.
   eval-determinism:
     name: Eval harness determinism
     runs-on: ubuntu-latest
@@ -40,7 +47,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Run eval tests twice and compare
+      - name: Run the suite twice and compare summaries
         run: |
           npm test 2>&1 | grep -E '^# (tests|pass|fail)' > run1.txt
           npm test 2>&1 | grep -E '^# (tests|pass|fail)' > run2.txt

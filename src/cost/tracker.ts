@@ -2,31 +2,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'n
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../util/logger.js';
+import { priceFor, costOf } from './catalog.js';
 
-const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-opus-4-20250514': { input: 15.0, output: 75.0 },
-  'claude-sonnet-4-20250514': { input: 3.0, output: 15.0 },
-  'claude-haiku-4-5-20251001': { input: 0.80, output: 4.0 },
-  'gpt-4o': { input: 2.50, output: 10.0 },
-  'gpt-4o-mini': { input: 0.15, output: 0.60 },
-  'grok-3': { input: 3.0, output: 15.0 },
-  'grok-3-mini': { input: 0.30, output: 0.50 },
-  'gemini-2.0-flash': { input: 0.10, output: 0.40 },
-  'gemini-1.5-pro': { input: 1.25, output: 5.0 },
-  'deepseek-chat': { input: 0.27, output: 1.10 },
-  'sonar-pro': { input: 3.0, output: 15.0 },
-};
-
-const DEFAULT_PRICING = { input: 3.0, output: 15.0 };
-
-// Local (Ollama) default models and any OpenRouter ':free' slug cost nothing.
-const FREE_LOCAL_MODELS = new Set(['llama3.1', 'qwen2.5', 'deepseek-r1', 'mistral', 'gemma2', 'phi3']);
-
-function priceFor(model: string): { input: number; output: number } {
-  if (PRICING[model]) return PRICING[model];
-  if (model.endsWith(':free') || FREE_LOCAL_MODELS.has(model)) return { input: 0, output: 0 };
-  return DEFAULT_PRICING;
-}
+export { priceFor, costOf };
 
 interface UsageEntry {
   timestamp: string;
@@ -57,6 +35,12 @@ export class CostTracker {
   private sessionOutputTokens = 0;
   private budget: BudgetConfig;
 
+  // History is read once per process and kept in memory. Previously every
+  // recordUsage re-read, re-parsed, filtered and rewrote the whole file, and
+  // checkBudget read it twice more on top of that.
+  private history: UsageEntry[] | null = null;
+  private pending: UsageEntry[] = [];
+
   constructor(budget: BudgetConfig = {}) {
     const dir = join(homedir(), '.boardroom');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -64,75 +48,115 @@ export class CostTracker {
     this.budget = budget;
   }
 
+  /**
+   * Pre-dispatch gate. Prices the worst case for a call that has not happened
+   * yet — full maxTokens of output, prompt length estimated at 4 chars/token —
+   * and reports whether making it would breach a cap. Over-estimating is the
+   * correct direction for a gate.
+   *
+   * A `blocked` result here is the only thing that can prevent spend;
+   * recordUsage runs after the money is gone.
+   */
+  reserve(model: string, estInputTokens: number, maxOutputTokens: number): CostAlert | null {
+    return this.checkBudgetAgainst(costOf(model, estInputTokens, maxOutputTokens));
+  }
+
   recordUsage(model: string, inputTokens: number, outputTokens: number): { cost: number; alert?: CostAlert } {
-    const pricing = priceFor(model);
-    const cost = (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;
+    const cost = costOf(model, inputTokens, outputTokens);
     this.sessionCost += cost;
     this.sessionInputTokens += inputTokens;
     this.sessionOutputTokens += outputTokens;
 
-    const entry: UsageEntry = { timestamp: new Date().toISOString(), model, inputTokens, outputTokens, cost };
-    this.appendEntry(entry);
+    this.pending.push({ timestamp: new Date().toISOString(), model, inputTokens, outputTokens, cost });
 
     const alert = this.checkBudget();
     return { cost, alert: alert || undefined };
   }
 
   private checkBudget(): CostAlert | null {
+    return this.checkBudgetAgainst(0);
+  }
+
+  /** `extra` is projected additional spend not yet recorded (0 for a post-hoc check). */
+  private checkBudgetAgainst(extra: number): CostAlert | null {
     const warnPct = this.budget.warnAt ?? 0.8;
 
+    const verdict = (spend: number, cap: number, label: string): CostAlert | null => {
+      if (spend >= cap) return { type: 'blocked', message: `${label} budget exceeded`, currentSpend: spend, cap };
+      if (spend >= cap * warnPct) return { type: 'warning', message: `Approaching ${label.toLowerCase()} budget`, currentSpend: spend, cap };
+      return null;
+    };
+
     if (this.budget.sessionCap) {
-      if (this.sessionCost >= this.budget.sessionCap) {
-        return { type: 'blocked', message: 'Session budget exceeded', currentSpend: this.sessionCost, cap: this.budget.sessionCap };
-      }
-      if (this.sessionCost >= this.budget.sessionCap * warnPct) {
-        return { type: 'warning', message: 'Approaching session budget', currentSpend: this.sessionCost, cap: this.budget.sessionCap };
-      }
+      const a = verdict(this.sessionCost + extra, this.budget.sessionCap, 'Session');
+      if (a) return a;
     }
-
     if (this.budget.dailyCap) {
-      const daily = this.getDailySpend();
-      if (daily >= this.budget.dailyCap) return { type: 'blocked', message: 'Daily budget exceeded', currentSpend: daily, cap: this.budget.dailyCap };
-      if (daily >= this.budget.dailyCap * warnPct) return { type: 'warning', message: 'Approaching daily budget', currentSpend: daily, cap: this.budget.dailyCap };
+      const a = verdict(this.getDailySpend() + extra, this.budget.dailyCap, 'Daily');
+      if (a) return a;
     }
-
     if (this.budget.weeklyCap) {
-      const weekly = this.getWeeklySpend();
-      if (weekly >= this.budget.weeklyCap) return { type: 'blocked', message: 'Weekly budget exceeded', currentSpend: weekly, cap: this.budget.weeklyCap };
-      if (weekly >= this.budget.weeklyCap * warnPct) return { type: 'warning', message: 'Approaching weekly budget', currentSpend: weekly, cap: this.budget.weeklyCap };
+      const a = verdict(this.getWeeklySpend() + extra, this.budget.weeklyCap, 'Weekly');
+      if (a) return a;
     }
     return null;
   }
 
-  getSessionStats() { return { cost: this.sessionCost, inputTokens: this.sessionInputTokens, outputTokens: this.sessionOutputTokens }; }
+  getSessionStats() {
+    return { cost: this.sessionCost, inputTokens: this.sessionInputTokens, outputTokens: this.sessionOutputTokens };
+  }
 
   getDailySpend(): number {
     const today = new Date().toISOString().slice(0, 10);
-    return this.loadData().entries.filter(e => e.timestamp.startsWith(today)).reduce((sum, e) => sum + e.cost, 0);
+    return this.allEntries()
+      .filter(e => e.timestamp.startsWith(today))
+      .reduce((sum, e) => sum + e.cost, 0);
   }
 
   getWeeklySpend(): number {
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    return this.loadData().entries.filter(e => e.timestamp >= weekAgo).reduce((sum, e) => sum + e.cost, 0);
+    return this.allEntries()
+      .filter(e => e.timestamp >= weekAgo)
+      .reduce((sum, e) => sum + e.cost, 0);
   }
 
-  private loadData(): { entries: UsageEntry[] } {
-    if (!existsSync(this.dataPath)) return { entries: [] };
+  /**
+   * Write buffered entries to disk. Must be called before the process exits;
+   * cli.ts calls process.exit() explicitly, which skips any async teardown, so
+   * this is deliberately synchronous.
+   */
+  flush(): void {
+    if (this.pending.length === 0) return;
+    const entries = this.allEntries();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const kept = entries.filter(e => e.timestamp >= cutoff);
     try {
-      return JSON.parse(readFileSync(this.dataPath, 'utf-8'));
+      // mode applies only at creation; chmod also tightens pre-existing files.
+      writeFileSync(this.dataPath, JSON.stringify({ entries: kept }, null, 2), { mode: 0o600 });
+      chmodSync(this.dataPath, 0o600);
+      this.history = kept;
+      this.pending = [];
     } catch (e) {
-      logger.warn('Failed to parse usage.json; cost history unavailable:', e instanceof Error ? e.message : e);
-      return { entries: [] };
+      logger.warn('Failed to write usage.json:', e instanceof Error ? e.message : e);
     }
   }
 
-  private appendEntry(entry: UsageEntry): void {
-    const data = this.loadData();
-    data.entries.push(entry);
-    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    data.entries = data.entries.filter(e => e.timestamp >= cutoff);
-    // mode applies only at creation; chmod also tightens pre-existing files.
-    writeFileSync(this.dataPath, JSON.stringify(data, null, 2), { mode: 0o600 });
-    chmodSync(this.dataPath, 0o600);
+  private allEntries(): UsageEntry[] {
+    return this.loadHistory().concat(this.pending);
+  }
+
+  private loadHistory(): UsageEntry[] {
+    if (this.history) return this.history;
+    let loaded: UsageEntry[] = [];
+    if (existsSync(this.dataPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(this.dataPath, 'utf-8'));
+        if (Array.isArray(parsed?.entries)) loaded = parsed.entries;
+      } catch (e) {
+        logger.warn('Failed to parse usage.json; cost history unavailable:', e instanceof Error ? e.message : e);
+      }
+    }
+    this.history = loaded;
+    return loaded;
   }
 }

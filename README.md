@@ -118,7 +118,7 @@ Eval runs skip the consultant briefing and prior-decision recall. Both inject te
 - **Optional research consultant.** A single web-grounded provider (typically Perplexity) produces a terse briefing that is prepended to every advisor's prompt, so disagreements are about judgment rather than stale training data. Disable with `--no-consultant` to isolate each vendor's priors.
 - **A measurement, not just a demo.** `boardroom eval` scores a fixed 30-question corpus for how often the board actually splits, using a deterministic extractor rather than a judge model, and can run a single-vendor control that is capable of refuting the project's own premise. See "Does the premise hold?" above.
 - **Cost transparency with budget guards.** A per-model pricing table drives live cost reporting, with optional session, daily, and weekly spend caps (soft warning and hard block).
-- **Resilient by default.** Every provider call retries with exponential backoff and uses a connect-only timeout that never kills a long stream.
+- **Resilient by default.** Every provider call retries with exponential backoff and uses a connect-only timeout that never kills a long stream. Retries stop once the response body has started producing text, so a mid-stream failure surfaces as an error rather than silently duplicating output.
 - **Partial board operation.** If a provider is missing a key or fails mid-run, its seat reports an error and the rest of the board proceeds. Two providers is the minimum to convene.
 - **Runs free, local or hosted.** Beyond per-vendor keys, BoardRoom can seat the whole board from local [Ollama](https://ollama.com) models (no keys, no cost) or from a single OpenRouter key, selected with `BOARDROOM_BACKEND`. See "Running without paid API keys" below.
 
@@ -126,7 +126,7 @@ Eval runs skip the consultant briefing and prior-decision recall. Both inject te
 
 ## Architecture
 
-BoardRoom is roughly 2,000 lines of TypeScript across 21 source files, with a small node:test suite. Four layers do the work.
+BoardRoom is roughly 4,800 lines of TypeScript across 39 source files, backed by a 133-test node:test suite. Four layers do the work.
 
 ### 1. Provider abstraction
 
@@ -243,12 +243,72 @@ Default response budgets are 1024 tokens per panelist in `ask` mode and 600 toke
 
 ---
 
+## `boardroom delegate` — cheap-first tiered dispatch
+
+A sibling of the board, not a layer under it. The board seats one vendor per role to *manufacture disagreement*; the delegator picks one model per task to *minimise cost*. Opposite objectives, so `roles.ts` is untouched and this is a separate command.
+
+Most work sent to a frontier model does not need one. The problem is knowing which work, and being able to prove it afterwards. Four things make that possible here. (For what prompted this and what it owes to [pilotfish](https://github.com/Nanako0129/pilotfish), see [Prior art](#prior-art).)
+
+**Tiers are price bands, not model aliases.** A tier resolves at runtime against whichever vendors you have credentialed, ranked by the same catalog that prices the budget gate, so the delegator can never select a model it cannot price:
+
+```
+$ boardroom delegate stats
+=== Tier resolution ===
+  cheap    → google/gemini-3.1-flash-lite  $0.56/Mtok blended
+  mid      → google/gemini-3.6-flash       $3.00/Mtok blended
+  frontier → anthropic/claude-opus-5       $10.00/Mtok blended
+```
+
+Add an OpenAI key to that same setup and cheap resolves to `gpt-5-nano` at `$0.05/$0.40` instead — against haiku's `$1.00/$5.00`, over 10x on identical work. A tier with no reachable vendor downgrades and reports `downgradedFrom` rather than failing or silently substituting.
+
+The catalog carries current-generation models only. "Still has a published price" and "is current" are different questions: `gpt-4o` is four generations behind and still sells. Answering only the first is how the table came to hold seven models that were retired, shut down, or superseded.
+
+Nothing here is a constraint, though. Every board seat takes `BOARDROOM_<VENDOR>_MODEL` (`BOARDROOM_OPENAI_MODEL`, `BOARDROOM_GOOGLE_MODEL`, and so on for all six), and the delegator takes `--model vendor:model` or `BOARDROOM_TIER_<TIER>`. Any of those accept a model string the catalog has never heard of: it is dispatched normally and priced at the warned default. So a model released tomorrow is usable today, and a stale default here is a nuisance rather than a wall.
+
+**The catalog is checked against the vendors, not trusted.** It is a hand-maintained table, and it rots silently — a model can be retired, shut down, or quietly superseded with nothing in the build noticing:
+
+```
+$ boardroom delegate --verify-catalog
+=== Catalog vs vendor ===
+  anthropic   ok
+  google      stale
+      gone: gemini-2.0-flash — the vendor no longer lists this
+      1 carried and confirmed, 47 served but not carried (--json to list)
+  openai      skipped — no credentials
+```
+
+It asks every credentialed vendor which models it actually serves and exits non-zero when the catalog names one that is gone — that entry cannot be called at all, and since tiers resolve by price, a cheap dead model wins its tier outright and every delegation routed to it fails. A vendor that cannot be reached is reported but does not fail the run, because being unable to ask is not evidence the catalog is wrong; `--strict` inverts that for a release gate, where a run that checked nothing must not read as a pass. The count of models a vendor serves but the catalog does not carry is the other half: it is how you notice a model is still purchasable but several generations behind, which no liveness check would ever flag.
+
+**Escalation is bought, not spent by default.** The cheapest capable tier is attempted first; a checker at the *same* tier on a *different vendor* tries to refute it; only a concretely named defect buys a more expensive attempt. A cheap answer therefore costs roughly one more cheap call to check, not a frontier call — and the check comes from a model with genuinely different priors, where a larger sibling from the same family tends to share the blind spot that produced the error. Three loop-safety rules matter:
+
+- A `REFUTED` that names no defect is treated as `CONFIRMED`. Otherwise a model that reflexively refuses to approve anything drives the ladder to the most expensive tier for free.
+- An unparseable verdict does not escalate. Failing open on escalation while failing closed on budget is the right asymmetry: a parser miss must never be able to spend frontier money.
+- The top tier is never verified. A refutation there would have nowhere to go, and it is the single most expensive call the delegator can make.
+
+**Delegation is measured, not guessed.** Every attempt lands in `~/.boardroom/delegations.jsonl` with its tier, vendor, cost, latency and outcome. `pickStartTier` starts from the class prior and walks up while the measured confirm rate at the current tier is poor, needing a minimum sample count so one bad run never moves the delegator. Every decision carries a `why` string naming its evidence — a delegator you cannot audit is a delegator you will not trust.
+
+**Limits are enforced, not stated.** Budget, concurrency and deadline are applied inside `collectStream()`, the single function every provider call passes through. `tests/enforcement-invariant.test.ts` asserts that no other file calls `createMessage`, so there is no path to a provider that skips the gate. The budget check runs *before* the request is sent and prices the worst case, so a call that would breach a cap is refused rather than reported after the fact.
+
+```bash
+boardroom delegate "summarize this changelog"            # classify, dispatch, verify
+boardroom delegate --explain --class code "..."          # show the decision and every attempt
+boardroom delegate --min-tier mid --session-cap 0.25 "..."
+boardroom delegate --model deepseek:deepseek-v4-flash "..."  # pin one model, no escalation
+boardroom delegate stats                                 # what each tier resolves to, and how it has been doing
+```
+
+Task classes are `recon`, `extract`, `summarize`, `draft`, `code`, `reason`, `research`, plus an internal `review`. Classification is a deterministic rules table, never a model call — classifying with a model to decide which model to use is circular and adds a call to every route.
+
+---
+
 ## Engineering highlights
 
 For anyone reading the source, these are the parts worth a look:
 
 - **One streaming contract over six vendors.** `src/provider/openai-compat.ts` translates four different OpenAI-flavored SSE streams (including the `stream_options.include_usage` end chunk) into the exact same event union that `src/provider/anthropic.ts` emits, so all downstream logic is vendor-blind.
-- **Resilience that does not truncate streams.** Both clients retry up to three times with exponential backoff on 429 and 5xx, and the 30-second timeout is wired to an `AbortController` whose timer is cleared the moment headers return (`.finally(() => clearTimeout(...))`). The connection has to be fast; the body can take as long as the model needs.
+- **Resilience that does not truncate streams.** Both clients retry up to three times with exponential backoff on 429 and 5xx, and the 30-second timeout is wired to an `AbortController` whose timer is cleared the moment headers return (`.finally(() => clearTimeout(...))`). The connection has to be fast; the body can take as long as the model needs. Retries are bounded to the part of the call that is safe to repeat: once the body has yielded its first text delta, a failure is raised rather than retried, because consumers accumulate text outside the stream and a re-issued request would concatenate a partial attempt with a complete one.
+
+- **Accounting at the point of spend.** Every provider call goes through a single `collectStream()` (`src/provider/collect.ts`), which is where usage is recorded and where the budget gate runs *before* the request is sent. `tests/enforcement-invariant.test.ts` asserts that no other file calls `createMessage`, so there is no path to a provider that skips the gate.
 - **Robert's Rules as real control flow.** `src/motion/protocol.ts` is the deliberation engine: a two-second threshold that can kill a motion before any tokens are spent on debate, strict format parsing for each phase, and stance-versus-vote flip detection so the minutes can show who changed their mind during debate.
 - **Per-model cost caps with a hard block.** `src/cost/tracker.ts` carries a pricing table for eleven models (Opus through Sonar), accumulates session/daily/weekly spend from the usage log, and can return a `blocked` alert when a cap is hit, not just a warning.
 - **Durable, careful local state.** `src/state/store.ts` bounds decision history, writes with restrictive permissions, and refuses to clobber an unreadable `state.json` (it renames it to `state.json.corrupt` so history is recoverable).
@@ -273,11 +333,22 @@ No LLM SDK dependency: both provider clients are hand-rolled `fetch` + SSE.
 
 These are directions the architecture already invites, not commitments:
 
+- Delegation over OpenRouter and Ollama slugs (both backends currently seat the board only; the delegator reads per-vendor keys).
+- Prompt caching across the three motion phases, which resend the same recall and briefing to the same vendor each time.
 - Configurable vendor-to-role assignment (the map is currently fixed in `roles.ts`).
-- Surfacing budget caps and warn thresholds as CLI flags rather than constructor config.
 - Richer minutes: per-advisor token and cost breakdown inside the meeting file.
 - A `history` command to browse and cite past decisions from the CLI.
 - Tool-use is modeled in the provider types but unused by the protocols; advisor-side research tools are a natural extension.
+
+---
+
+## Prior art
+
+`boardroom delegate` was prompted by [pilotfish](https://github.com/Nanako0129/pilotfish) by [@Nanako0129](https://github.com/Nanako0129) (MIT), a configuration layer that routes Claude Code's work across Anthropic model tiers. It framed the problem clearly, and three ideas here follow its lead: a three-tier hierarchy, an adversarial checker that returns a `CONFIRMED`/`REFUTED` verdict, and a hard cap on how many times work may be escalated.
+
+The implementation is independent. No pilotfish code is used — it is Python and markdown templates written into `~/.claude/`, this is TypeScript that dispatches calls at runtime, and nothing was copied between them. The approach diverges accordingly: pilotfish states its orchestration policy as prose for a model to follow, while this enforces limits in code at a single choke point; its tiers are Anthropic aliases, while these are price bands resolved across whichever vendors you have credentialed; its verifier runs on the frontier tier, while this one runs same-tier on a different vendor. pilotfish's own design doc lists enforcement hooks and a telemetry feedback loop among the things it deliberately excludes, and those two exclusions are most of what this adds.
+
+Credit where it is due in both directions: the claim that independent fresh-context verification beats self-critique is one pilotfish cites from Anthropic's documentation, and originates with neither project.
 
 ---
 

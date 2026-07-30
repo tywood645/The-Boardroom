@@ -1,7 +1,10 @@
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
+import { collectStream } from '../provider/collect.js';
+import type { RunContext } from '../provider/collect.js';
 import { roleForVendor } from '../boardroom/roles.js';
-import { consultBriefing, applyBriefing } from '../boardroom/consultant.js';
+import { consultBriefing } from '../boardroom/consultant.js';
+import type { ConsultantBriefing } from '../boardroom/consultant.js';
 import type {
   SecondVote,
   DebateSpeech,
@@ -15,6 +18,19 @@ export interface MotionOptions {
   consultant?: boolean;
   maxTokens?: number;
   recall?: string | null;       // PRIOR BOARD CONTEXT block prepended to every phase
+  ctx?: RunContext;             // budget gate, concurrency cap and deadline
+}
+
+/** Every phase prefixes the same briefing block. */
+function briefingBlockOf(briefing: ConsultantBriefing | null): string {
+  return briefing
+    ? `CONSULTANT BRIEFING (current research):\n${briefing.text}\n\n--- end briefing ---\n\n`
+    : '';
+}
+
+/** Every advisor gets the same role preamble in every phase. */
+function systemFor(roleName: string, mindset: string): string {
+  return `You are the ${roleName} on a small advisory board. Stay in role.\n\n${mindset}`;
 }
 
 const SECOND_THRESHOLD = 2;     // need at least 2 seconds to proceed
@@ -36,10 +52,12 @@ export async function runMotion(
   const consultant = configs.find(c => c.name === 'perplexity');
   const consultantInput = recall ? `${recall}MOTION:\n${motion}` : motion;
   const briefing =
-    consultantEnabled && consultant ? await consultBriefing(consultant, consultantInput) : null;
+    consultantEnabled && consultant
+      ? await consultBriefing(consultant, consultantInput, undefined, opts.ctx)
+      : null;
 
   // Phase 2: SECOND
-  const seconds = await runSecondPhase(configs, motion, briefing, maxTokens, recall);
+  const seconds = await runSecondPhase(configs, motion, briefing, maxTokens, recall, opts.ctx);
   const validSeconds = seconds.filter(s => !s.error && s.seconded).length;
 
   if (validSeconds < SECOND_THRESHOLD) {
@@ -58,10 +76,10 @@ export async function runMotion(
   }
 
   // Phase 3: DEBATE
-  const debate = await runDebatePhase(configs, motion, briefing, seconds, maxTokens, recall);
+  const debate = await runDebatePhase(configs, motion, briefing, seconds, maxTokens, recall, opts.ctx);
 
   // Phase 4: VOTE
-  const votes = await runVotePhase(configs, motion, briefing, debate, maxTokens, recall);
+  const votes = await runVotePhase(configs, motion, briefing, debate, maxTokens, recall, opts.ctx);
 
   // Tally
   const tally = {
@@ -95,13 +113,12 @@ export async function runMotion(
 async function runSecondPhase(
   configs: ProviderConfig[],
   motion: string,
-  briefing: any,
+  briefing: ConsultantBriefing | null,
   maxTokens: number,
   recall: string | null,
+  ctx?: RunContext,
 ): Promise<SecondVote[]> {
-  const briefingBlock = briefing
-    ? `CONSULTANT BRIEFING (current research):\n${briefing.text}\n\n--- end briefing ---\n\n`
-    : '';
+  const briefingBlock = briefingBlockOf(briefing);
 
   const userPrompt =
     (recall || '') +
@@ -121,11 +138,9 @@ async function runSecondPhase(
       if (!role) {
         return makeErrorSecond(cfg, 'no role assigned');
       }
-      const system =
-        `You are the ${role.name} on a small advisory board. Stay in role.\n\n${role.mindset}`;
-      const start = Date.now();
+      const system = systemFor(role.name, role.mindset);
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens);
+        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
         const parsed = parseSecond(result.text);
         return {
           panelist: cfg.name,
@@ -135,7 +150,8 @@ async function runSecondPhase(
           reason: parsed.reason,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
-          durationMs: Date.now() - start,
+          cost: result.cost,
+          durationMs: result.durationMs,
         };
       } catch (e: any) {
         return makeErrorSecond(cfg, e?.message || String(e));
@@ -164,6 +180,7 @@ function makeErrorSecond(cfg: ProviderConfig, error: string): SecondVote {
     reason: '',
     inputTokens: 0,
     outputTokens: 0,
+    cost: 0,
     durationMs: 0,
     error,
   };
@@ -176,14 +193,13 @@ function makeErrorSecond(cfg: ProviderConfig, error: string): SecondVote {
 async function runDebatePhase(
   configs: ProviderConfig[],
   motion: string,
-  briefing: any,
+  briefing: ConsultantBriefing | null,
   seconds: SecondVote[],
   maxTokens: number,
   recall: string | null,
+  ctx?: RunContext,
 ): Promise<DebateSpeech[]> {
-  const briefingBlock = briefing
-    ? `CONSULTANT BRIEFING (current research):\n${briefing.text}\n\n--- end briefing ---\n\n`
-    : '';
+  const briefingBlock = briefingBlockOf(briefing);
 
   const secondedBy = seconds.filter(s => s.seconded && !s.error).map(s => s.role).join(', ');
 
@@ -201,11 +217,9 @@ async function runDebatePhase(
     configs.map(async (cfg): Promise<DebateSpeech> => {
       const role = roleForVendor(cfg.name);
       if (!role) return makeErrorDebate(cfg, 'no role assigned');
-      const system =
-        `You are the ${role.name} on a small advisory board. Stay in role.\n\n${role.mindset}`;
-      const start = Date.now();
+      const system = systemFor(role.name, role.mindset);
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens);
+        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
         const parsed = parseDebate(result.text);
         return {
           panelist: cfg.name,
@@ -215,7 +229,8 @@ async function runDebatePhase(
           case: parsed.case,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
-          durationMs: Date.now() - start,
+          cost: result.cost,
+          durationMs: result.durationMs,
         };
       } catch (e: any) {
         return makeErrorDebate(cfg, e?.message || String(e));
@@ -243,6 +258,7 @@ function makeErrorDebate(cfg: ProviderConfig, error: string): DebateSpeech {
     case: '',
     inputTokens: 0,
     outputTokens: 0,
+    cost: 0,
     durationMs: 0,
     error,
   };
@@ -255,14 +271,13 @@ function makeErrorDebate(cfg: ProviderConfig, error: string): DebateSpeech {
 async function runVotePhase(
   configs: ProviderConfig[],
   motion: string,
-  briefing: any,
+  briefing: ConsultantBriefing | null,
   debate: DebateSpeech[],
   maxTokens: number,
   recall: string | null,
+  ctx?: RunContext,
 ): Promise<FinalVote[]> {
-  const briefingBlock = briefing
-    ? `CONSULTANT BRIEFING (current research):\n${briefing.text}\n\n--- end briefing ---\n\n`
-    : '';
+  const briefingBlock = briefingBlockOf(briefing);
   const recallBlock = recall || '';
 
   const debateBlock = debate
@@ -277,8 +292,7 @@ async function runVotePhase(
       const myDebate = debate.find(d => d.panelist === cfg.name);
       const myStance: Stance = myDebate?.stance || 'UNDECIDED';
 
-      const system =
-        `You are the ${role.name} on a small advisory board. Stay in role.\n\n${role.mindset}`;
+      const system = systemFor(role.name, role.mindset);
       const userPrompt =
         recallBlock +
         briefingBlock +
@@ -289,11 +303,10 @@ async function runVotePhase(
         `VOTE: AYE | NAY | ABSTAIN\n` +
         `REASON: <one sentence in your role's voice>`;
 
-      const start = Date.now();
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens);
+        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
         const parsed = parseVote(result.text);
-        const flipped = !!myStance && stanceVsVote(myStance, parsed.vote);
+        const flipped = stanceVsVote(myStance, parsed.vote);
         return {
           panelist: cfg.name,
           role: role.name,
@@ -303,7 +316,8 @@ async function runVotePhase(
           flipped,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
-          durationMs: Date.now() - start,
+          cost: result.cost,
+          durationMs: result.durationMs,
         };
       } catch (e: any) {
         return makeErrorVote(cfg, e?.message || String(e), myStance);
@@ -339,6 +353,7 @@ function makeErrorVote(cfg: ProviderConfig, error: string, stance: Stance): Fina
     flipped: false,
     inputTokens: 0,
     outputTokens: 0,
+    cost: 0,
     durationMs: 0,
     error,
   };
@@ -348,39 +363,22 @@ function makeErrorVote(cfg: ProviderConfig, error: string, stance: Stance): Fina
 // Provider call helper
 // ---------------------------------------------------------------------------
 
-interface CollectResult {
-  text: string;
-  inputTokens: number;
-  outputTokens: number;
-}
-
 async function callAndCollect(
   cfg: ProviderConfig,
   system: string,
   userPrompt: string,
   maxTokens: number,
-): Promise<CollectResult> {
-  const provider = createProvider(cfg);
-  const stream = provider.createMessage({
-    system,
-    messages: [{ role: 'user', content: userPrompt }],
-    tools: [],
-    maxTokens,
-    model: cfg.model,
-  });
-  let text = '';
-  let inputTokens = 0;
-  let outputTokens = 0;
-  for await (const ev of stream) {
-    if (ev.type === 'message_start') {
-      inputTokens = ev.message.usage.input_tokens;
-    } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
-      text += ev.delta.text;
-    } else if (ev.type === 'message_delta') {
-      outputTokens = ev.usage.output_tokens;
-    } else if (ev.type === 'error') {
-      throw new Error(ev.error.message);
-    }
-  }
-  return { text: text.trim(), inputTokens, outputTokens };
+  ctx?: RunContext,
+) {
+  return collectStream(
+    createProvider(cfg),
+    {
+      system,
+      messages: [{ role: 'user', content: userPrompt }],
+      tools: [],
+      maxTokens,
+      model: cfg.model,
+    },
+    ctx,
+  );
 }

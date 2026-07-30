@@ -1,6 +1,7 @@
 import { LLMProvider } from './base.js';
 import type { MessageCreateParams, StreamEvent } from './types.js';
 import { ProviderError } from '../util/error.js';
+import { linkAbort, isDeadlineAbort } from '../util/abort.js';
 import { logger } from '../util/logger.js';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
@@ -55,10 +56,18 @@ export class AnthropicProvider extends LLMProvider {
     };
 
     let lastError: Error | null = null;
+    // Retrying is only safe before the first content delta reaches the consumer.
+    // Consumers accumulate text outside this generator, so a retry after partial
+    // output would leave them holding attempt-1's prefix plus all of attempt 2.
+    let yieldedContent = false;
+    let unlink: () => void = () => {};
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         const controller = new AbortController();
+        // The run deadline aborts connect and body alike; the connect timer is
+        // cleared once headers land so a long stream is never truncated.
+        unlink = linkAbort(controller, params.signal);
         const connectTimer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
         const response = await fetch(API_URL, {
           method: 'POST',
@@ -98,7 +107,10 @@ export class AnthropicProvider extends LLMProvider {
           buffer = chunks.pop()!;
 
           for (const chunk of chunks) {
-            yield* parseAnthropicChunk(chunk);
+            for (const ev of parseAnthropicChunk(chunk)) {
+              if (ev.type === 'content_block_delta') yieldedContent = true;
+              yield ev;
+            }
           }
         }
 
@@ -106,14 +118,22 @@ export class AnthropicProvider extends LLMProvider {
         // emit any final event still buffered without a blank-line terminator.
         buffer += decoder.decode();
         for (const chunk of buffer.split('\n\n')) {
-          yield* parseAnthropicChunk(chunk);
+          for (const ev of parseAnthropicChunk(chunk)) {
+            if (ev.type === 'content_block_delta') yieldedContent = true;
+            yield ev;
+          }
         }
         return;
       } catch (e) {
+        if (isDeadlineAbort(e)) throw e;
         if (e instanceof ProviderError && e.statusCode && e.statusCode < 500 && e.statusCode !== 429) {
           throw e;
         }
         lastError = e as Error;
+        if (yieldedContent) throw lastError;
+      } finally {
+        unlink();
+        unlink = () => {};
       }
     }
 

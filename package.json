@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/bin/boardroom.js",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "test": "node --import tsx/esm --test tests/*.test.ts"
   },
   "author": "Tyler Wood (https://github.com/tywood645)",
