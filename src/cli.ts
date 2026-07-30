@@ -1,5 +1,10 @@
+import { writeFileSync } from 'node:fs';
 import { Command } from 'commander';
 import { detectProviders } from './provider/factory.js';
+import { runEval } from './eval/run.js';
+import { renderReport, renderComparison } from './eval/render.js';
+import { compareToControl } from './eval/divergence.js';
+import { CATEGORIES, type Category } from './eval/corpus.js';
 import { runBoardroom, describeAssignment } from './boardroom/protocol.js';
 import { renderBoardroom } from './boardroom/render.js';
 import { CostTracker } from './cost/tracker.js';
@@ -95,6 +100,76 @@ export async function main(): Promise<void> {
         console.error('Warning: failed to persist decision to state.json:', e?.message || e);
       }
       renderMotion(result);
+      deadline.dispose();
+      tracker.flush();
+      process.exit(0);
+    });
+
+  // ----- measurement mode (divergence eval over the fixed corpus) -----
+  // A full run is 180 provider calls per arm, so it takes the same budget,
+  // concurrency and deadline flags as the board itself and shares the one
+  // tracker: the eval is not exempt from the spend gate.
+  program
+    .command('eval')
+    .description('Measure how often the board actually splits, over a fixed 30-question corpus')
+    .option('--category <name>', 'Restrict to one category: capital, hiring, product, gtm')
+    .option('--limit <n>', 'Run only the first N questions (smoke tests)')
+    .option('--max-tokens <n>', 'Max tokens per panelist response', '512')
+    .option('--control <vendor>', 'Seat ONE vendor in all six roles instead of the real panel')
+    .option('--compare <vendor>', 'Run the panel AND a single-vendor control, then compare')
+    .option('--json <path>', 'Write the full report to a JSON file')
+    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
+    .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
+    .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
+    .option('--concurrency <n>', 'Max provider calls in flight', String(DEFAULT_CONCURRENCY))
+    .option('--deadline <ms>', 'Wall-clock budget for the whole run', String(DEFAULT_DEADLINE_MS))
+    .action(async (cmdOpts: RunFlags & {
+      category?: string; limit?: string; maxTokens: string;
+      control?: string; compare?: string; json?: string;
+    }) => {
+      const configs = ensureConfigs();
+
+      if (cmdOpts.category && !CATEGORIES.includes(cmdOpts.category as Category)) {
+        console.error(`--category must be one of: ${CATEGORIES.join(', ')}`);
+        process.exit(1);
+      }
+      if (cmdOpts.control && cmdOpts.compare) {
+        console.error('--control and --compare are mutually exclusive.');
+        process.exit(1);
+      }
+
+      const { ctx, tracker, deadline } = makeContext(cmdOpts);
+      const base = {
+        category: cmdOpts.category as Category | undefined,
+        limit: cmdOpts.limit ? parseInt(cmdOpts.limit) : undefined,
+        maxTokens: parseInt(cmdOpts.maxTokens),
+        ctx,
+        onProgress: (done: number, total: number, id: string) => {
+          process.stderr.write(`\r  ${done}/${total} ${id}          `);
+        },
+      };
+
+      const panel = await runEval(configs, { ...base, control: cmdOpts.control });
+      process.stderr.write('\r');
+      renderReport(panel.report, panel.costUsd);
+
+      let comparison;
+      if (cmdOpts.compare) {
+        const control = await runEval(configs, { ...base, control: cmdOpts.compare });
+        process.stderr.write('\r');
+        renderReport(control.report, control.costUsd);
+        comparison = compareToControl(panel.report, control.report);
+        renderComparison(comparison);
+      }
+
+      if (cmdOpts.json) {
+        writeFileSync(
+          cmdOpts.json,
+          JSON.stringify(comparison ?? panel.report, null, 2),
+          'utf-8',
+        );
+        console.log(`Report written to ${cmdOpts.json}`);
+      }
       deadline.dispose();
       tracker.flush();
       process.exit(0);

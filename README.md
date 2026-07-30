@@ -55,12 +55,68 @@ Motion phases: brief -> second -> debate -> vote -> minutes
 
 ---
 
+## Does the premise hold?
+
+BoardRoom's entire claim is in one sentence: **six different vendors disagree more usefully than one vendor wearing six hats.** That is a falsifiable claim, so the repo ships the instrument that tries to falsify it.
+
+`boardroom eval` runs a fixed corpus of 30 hand-written, closed-form business decisions past the board and measures how often the six advisors actually split. Then it runs the identical corpus with **one vendor seated in all six roles** and measures the same thing. If multi-vendor divergence is not meaningfully higher than single-vendor divergence, the premise is wrong and this README should say so.
+
+```bash
+boardroom eval                        # six vendors, one per seat
+boardroom eval --control anthropic    # one vendor in all six seats
+boardroom eval --compare anthropic    # run both arms and print the premise check
+boardroom eval --category capital --limit 5 --json out.json
+```
+
+```
+BoardRoom divergence eval - 30 questions, multi-vendor panel (6 vendors)
+
+  parse rate        172/180 votes (95.6%)
+  scored questions  30 of 30  (>=2 parsed votes)
+  divergence rate   0.633   (19 of 30 questions split)
+  mean minority     0.244   (share of panel on the losing side)
+  unscored votes    5 ambiguous, 3 no-match, 0 provider errors
+
+  by category             scored  divergent    rate
+      capital                  8          6   0.750
+      hiring                   7          4   0.571
+      product                  8          5   0.625
+      gtm                      7          4   0.571
+
+  most contrarian   Devil (perplexity)  0.407
+  least contrarian  CEO (anthropic)     0.115
+
+  run cost: $0.4120
+
+=== Premise check ===
+  multi-vendor divergence   0.633
+  single-vendor divergence  0.300
+  delta                     +0.333
+
+  Six vendors disagreed measurably more than one vendor in six roles.
+```
+
+> **Numbers above are format, not results.** The corpus, the extractor, and the scorer are in the repo and run today; the headline figure needs a funded run across six paid vendors, which has not happened yet. This section gets replaced with real output, including the single-vendor control, or the claim gets retracted. Until then BoardRoom is unmeasured and you should treat it accordingly.
+
+### Why this is an eval and not a vibe
+
+No human reads the answers, and no model grades them.
+
+Each question is a forced binary — *raise now* or *extend runway* — with a hand-written alias list per option. The `ask` protocol already mandates that an advisor's **first sentence is their recommendation**, so the scorer reads only that sentence and matches it against the alias lists. One option matched means a recorded vote. Both matched, or an alias sitting behind a negation, means **ambiguous**; nothing matched means **no match**. Ambiguous and unmatched votes are never guessed at and never sent to a judge model — they are dropped from scoring and surface as the **parse rate**, which is itself a reported number.
+
+Reading only the first sentence is deliberate. The format also requires a closing counterargument, and that sentence names the option the advisor *rejected* — so scanning the full answer would match both options on nearly every question. The strict window is what makes the extraction deterministic.
+
+Eval runs skip the consultant briefing and prior-decision recall. Both inject text that varies between runs, and a measurement you cannot reproduce is not a measurement.
+
+---
+
 ## Features
 
 - **Ask Mode (sealed-bid exploration).** Six advisors answer in parallel, none seeing another's answer first. Optional round 2 cross-examines round 1, letting advisors disagree, concede, or hold position. Tunable response budget per panelist.
 - **Motion Mode (Robert's Rules).** A concrete motion runs through four phases: second, debate, vote, minutes. A motion needs at least two seconds or it dies. Votes track whether an advisor flipped between their debate stance and their final ballot. Minority dissent is captured by name.
 - **Persistent institutional memory.** Settled decisions and a user-editable standing context are auto-loaded and prepended to future meetings so the board builds on prior judgment instead of re-litigating it. Disable per run with `--no-recall`.
 - **Optional research consultant.** A single web-grounded provider (typically Perplexity) produces a terse briefing that is prepended to every advisor's prompt, so disagreements are about judgment rather than stale training data. Disable with `--no-consultant` to isolate each vendor's priors.
+- **A measurement, not just a demo.** `boardroom eval` scores a fixed 30-question corpus for how often the board actually splits, using a deterministic extractor rather than a judge model, and can run a single-vendor control that is capable of refuting the project's own premise. See "Does the premise hold?" above.
 - **Cost transparency with budget guards.** A per-model pricing table drives live cost reporting, with optional session, daily, and weekly spend caps (soft warning and hard block).
 - **Resilient by default.** Every provider call retries with exponential backoff and uses a connect-only timeout that never kills a long stream. Retries stop once the response body has started producing text, so a mid-stream failure surfaces as an error rather than silently duplicating output.
 - **Partial board operation.** If a provider is missing a key or fails mid-run, its seat reports an error and the rest of the board proceeds. Two providers is the minimum to convene.
@@ -70,7 +126,7 @@ Motion phases: brief -> second -> debate -> vote -> minutes
 
 ## Architecture
 
-BoardRoom is roughly 2,000 lines of TypeScript across 21 source files, with a small node:test suite. Four layers do the work.
+BoardRoom is roughly 4,800 lines of TypeScript across 39 source files, backed by a 133-test node:test suite. Four layers do the work.
 
 ### 1. Provider abstraction
 
@@ -172,6 +228,15 @@ boardroom --no-recall "Fresh perspective on business model"
 
 # Custom response budget
 boardroom --max-tokens 2048 "Deep strategy question"
+
+# Measure how often the board actually splits (30-question corpus)
+boardroom eval
+
+# Same corpus, one vendor in all six seats, then compare the two
+boardroom eval --compare anthropic
+
+# Smoke test the harness cheaply before a full run
+boardroom eval --category capital --limit 3
 ```
 
 Default response budgets are 1024 tokens per panelist in `ask` mode and 600 tokens per phase response in `motion` mode.

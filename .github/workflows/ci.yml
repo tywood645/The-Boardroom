@@ -32,3 +32,24 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+  # The divergence eval is only trustworthy if the extractor is deterministic
+  # and the corpus aliases stay disjoint. Both are asserted by tests, but
+  # running the suite twice catches accidental order- or state-dependence that
+  # a single pass would hide.
+  eval-determinism:
+    name: Eval harness determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Run the suite twice and compare summaries
+        run: |
+          npm test 2>&1 | grep -E '^# (tests|pass|fail)' > run1.txt
+          npm test 2>&1 | grep -E '^# (tests|pass|fail)' > run2.txt
+          diff run1.txt run2.txt
+          cat run1.txt
