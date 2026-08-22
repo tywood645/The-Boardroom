@@ -23,6 +23,11 @@ export interface ExtractResult {
   window?: 'first_sentence' | 'first_two_sentences';
   /** The exact alias text that matched, for auditing a run. */
   matchedAlias?: string;
+  /**
+   * Set when a sentence named both options and the vote was taken from the
+   * main clause. Recorded so a run can be audited for how often this fired.
+   */
+  resolvedBy?: 'main_clause';
 }
 
 /**
@@ -110,16 +115,46 @@ interface AliasHit {
   optionId: string;
   alias: string;
   negated: boolean;
+  /** Character offset of the match, used to resolve a two-option sentence. */
+  index: number;
+  /** True when the hit sits in a trailing clause after a dash, colon or comma. */
+  subordinate: boolean;
+}
+
+/**
+ * Where the main clause of a sentence ends.
+ *
+ * The forced-choice instruction tells an advisor to open with one option, and a
+ * good comparative answer then names the option it rejected in a trailing
+ * clause: "Financial VC - the burden of proof sits on the strategic to overcome
+ * it." Both options appear, but only one is the vote, and it is the one in the
+ * main clause.
+ *
+ * Splitting on the first dash, colon or semicolon captures that shape. A comma
+ * is deliberately NOT a boundary: commas appear inside main clauses far too
+ * often ("Raise now, before revenue slips") and treating one as a clause break
+ * would discard real votes.
+ */
+function mainClauseEnd(window: string): number {
+  const m = window.match(/\s+[-–—]\s+|\s*[:;]\s+/);
+  return m && m.index !== undefined ? m.index : window.length;
 }
 
 function findHits(window: string, question: EvalQuestion): AliasHit[] {
   const hits: AliasHit[] = [];
+  const clauseEnd = mainClauseEnd(window);
   for (const option of question.options) {
     for (const alias of option.aliases) {
       const re = new RegExp(`(?<![a-z0-9])${escapeRegExp(normalize(alias))}(?![a-z0-9])`, 'g');
       let m: RegExpExecArray | null;
       while ((m = re.exec(window)) !== null) {
-        hits.push({ optionId: option.id, alias, negated: isNegated(window, m.index) });
+        hits.push({
+          optionId: option.id,
+          alias,
+          negated: isNegated(window, m.index),
+          index: m.index,
+          subordinate: m.index >= clauseEnd,
+        });
       }
     }
   }
@@ -138,6 +173,26 @@ function classify(window: string, question: EvalQuestion): ExtractResult | null 
     return { status: 'matched', optionId: first.optionId, matchedAlias: first.alias };
   }
   if (positiveOptions.size > 1) {
+    // Two options named in one sentence. Measured against six real vendors this
+    // is the single largest source of discarded votes, and most of those votes
+    // are not actually ambiguous to a reader: the advisor complied, opened with
+    // its choice, and then named the option it rejected in a trailing clause.
+    //
+    // Resolve it ONLY in that unambiguous shape: exactly one option in the main
+    // clause, every mention of the other confined to the subordinate clause.
+    // Anything else stays ambiguous, because guessing between two options in a
+    // single main clause would manufacture a vote that was never cast.
+    const mainClause = positive.filter(h => !h.subordinate);
+    const mainOptions = new Set(mainClause.map(h => h.optionId));
+    if (mainOptions.size === 1) {
+      const first = mainClause.reduce((a, b) => (a.index <= b.index ? a : b));
+      return {
+        status: 'matched',
+        optionId: first.optionId,
+        matchedAlias: first.alias,
+        resolvedBy: 'main_clause',
+      };
+    }
     return { status: 'ambiguous', reason: 'multiple_options' };
   }
   // Every hit was negated. Refuse rather than invert.
