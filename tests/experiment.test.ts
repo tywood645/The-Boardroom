@@ -207,6 +207,39 @@ describe('runExperiment: trials and bookkeeping', () => {
     assert.equal(result.pairedQuestions, 2 * 3 * 2);
   });
 
+  it('interleaves the arms so an interruption cannot truncate just one', async () => {
+    // A sequential implementation runs every treatment cell before the first
+    // control cell, so a wall-clock deadline lands entirely on the control arm
+    // and the paired test is left with a biased subset of questions. Observed
+    // in a real run: 26 minutes of treatment calls while the control vendor sat
+    // idle. Interleaving keeps the arms within one cell of each other, so any
+    // truncation costs pairs rather than skewing them.
+    const order: string[] = [];
+    const configs = detectProviders();
+    await runExperiment(configs, {
+      control: 'anthropic', limit: 3, rotations: 2,
+      onProgress: (_d, _t, label) => {
+        order.push(label.includes('[control]') ? 'C' : 'T');
+      },
+    });
+
+    assert.ok(order.length > 0, 'progress must be reported');
+    assert.deepEqual(
+      [...new Set(order)].sort(), ['C', 'T'],
+      'both arms must report progress',
+    );
+
+    // The strong property: at no point does one arm get more than one cell
+    // ahead of the other.
+    let lead = 0;
+    let maxLead = 0;
+    for (const arm of order) {
+      lead += arm === 'T' ? 1 : -1;
+      maxLead = Math.max(maxLead, Math.abs(lead));
+    }
+    assert.ok(maxLead <= 1, `arms drifted ${maxLead} cells apart; they must stay interleaved`);
+  });
+
   it('rejects an unavailable control vendor', async () => {
     const configs = detectProviders();
     await assert.rejects(

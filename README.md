@@ -102,11 +102,35 @@ BoardRoom divergence eval - 30 questions, multi-vendor panel (6 vendors)
 
 No human reads the answers, and no model grades them.
 
-Each question is a forced binary — *raise now* or *extend runway* — with a hand-written alias list per option. The `ask` protocol already mandates that an advisor's **first sentence is their recommendation**, so the scorer reads only that sentence and matches it against the alias lists. One option matched means a recorded vote. Both matched, or an alias sitting behind a negation, means **ambiguous**; nothing matched means **no match**. Ambiguous and unmatched votes are never guessed at and never sent to a judge model — they are dropped from scoring and surface as the **parse rate**, which is itself a reported number.
+Each question is a forced binary — *raise now* or *extend runway* — with a hand-written alias list per option. The `ask` protocol already mandates that an advisor's **first sentence is their recommendation**, so the scorer reads only that sentence and matches it against the alias lists. One option matched means a recorded vote. An alias sitting behind a negation means **ambiguous**; prose that matches nothing means **no match**; an answer with no visible text at all is **empty**. None of these are guessed at and none are sent to a judge model — they drop out of scoring and surface as the **parse rate**, which is itself a reported number.
 
 Reading only the first sentence is deliberate. The format also requires a closing counterargument, and that sentence names the option the advisor *rejected* — so scanning the full answer would match both options on nearly every question. The strict window is what makes the extraction deterministic.
 
+**A sentence that names both options is resolved only by clause position.** A well-reasoned comparative answer often opens with its pick and then concedes the alternative in a trailing clause: *"Financial VC — the burden of proof sits on the strategic to overcome it."* When exactly one option appears in the main clause and every mention of the other is confined to a trailing clause after a dash, colon or semicolon, the main clause is the vote. Both options in one main clause stays ambiguous, because choosing between them would manufacture a vote nobody cast. A comma is not a clause boundary: commas sit inside main clauses far too often (*"Raise now, before revenue slips"*) and demoting on one would discard real votes.
+
+**Empty answers are reported separately from unparseable ones**, because they are opposite diagnoses. A reasoning model can spend its entire token budget on hidden reasoning and return no visible content — that is a panelist who never spoke, not one this code failed to understand. Folding the two together would let a board that is effectively four vendors be published as six. This is not hypothetical: at a 512-token budget, two of six vendors measured here returned zero visible characters on every question. The eval default is 1500 tokens for that reason.
+
 Eval runs skip the consultant briefing and prior-decision recall. Both inject text that varies between runs, and a measurement you cannot reproduce is not a measurement.
+
+### Rotation: measuring vendors, not role prompts
+
+The default board pins each vendor to one seat. That makes vendor and role **perfectly confounded**: the Devil's Advocate is instructed to *"not offer the upside"* and to *"default to attack"*, so reporting whichever vendor holds that chair as the most contrarian restates the prompt it was handed. No amount of extra sampling fixes it, because every vendor difference is also a role difference.
+
+`--rotate` sweeps a cyclic **Latin square**: across *k* rotations each vendor holds each role exactly once, and each role is held by each vendor exactly once. Vendor effects and role effects become orthogonal and can be estimated separately from the same runs. The report **withholds** the vendor/role decomposition unless the sweep it actually ran verifies as balanced, because pooling an unbalanced sweep re-confounds the two axes while still producing plausible-looking numbers.
+
+### The decision rule is pre-registered
+
+Both arms answer the identical corpus, so the observations are **paired** and the test is **McNemar's** on discordant pairs, using the exact binomial below 25 discordant pairs where the chi-square approximation is unreliable. Each arm's rate carries a **Wilson interval**, which stays inside [0,1] near the extremes where divergence rates can legitimately sit.
+
+The verdict has **three** outcomes, not two:
+
+| Verdict | Condition |
+|---|---|
+| **supported** | CI on the delta excludes zero **and** the delta clears a pre-registered practical floor (default 10 points) |
+| **refuted** | the control arm diverged *more*, significantly |
+| **inconclusive** | anything else, including a large point estimate on evidence too thin to exclude zero |
+
+Collapsing "the evidence cannot tell" into "refuted" would let a thin run read as a disproof; collapsing it into "supported" would be worse. A bare `delta >= 0.10` threshold cannot make that distinction: on 30 questions a 10-point delta is three questions, and a 17-vs-13 split clears it at *p* = 0.29 with a confidence interval spanning −4.5% to +31.2%.
 
 ---
 

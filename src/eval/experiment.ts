@@ -104,48 +104,60 @@ export interface ExperimentResult {
 const cellKey = (c: { trial: number; rotation: number; questionId: string }) =>
   `${c.trial}:${c.rotation}:${c.questionId}`;
 
-async function runArm(
+/** Accumulates one arm's cells as the interleaved run produces them. */
+interface ArmAccumulator {
+  label: string;
+  seatsFor: (rotation: number) => ReturnType<typeof buildRotatedSeats>;
+  cells: CellResult[];
+  scores: QuestionScore[];
+  costUsd: number;
+  panelSize: number;
+}
+
+function newArm(
   label: string,
   seatsFor: (rotation: number) => ReturnType<typeof buildRotatedSeats>,
-  questions: EvalQuestion[],
-  trials: number,
-  rotations: number,
+): ArmAccumulator {
+  return { label, seatsFor, cells: [], scores: [], costUsd: 0, panelSize: 0 };
+}
+
+function finishArm(arm: ArmAccumulator): ArmResult {
+  return {
+    label: arm.label,
+    report: buildReport(arm.label, arm.panelSize, arm.scores),
+    cells: arm.cells,
+    costUsd: arm.costUsd,
+  };
+}
+
+/** Ask one arm one question, and record the result into that arm. */
+async function runCell(
+  arm: ArmAccumulator,
+  question: EvalQuestion,
+  trial: number,
+  rotation: number,
   maxTokens: number,
   tracker: CostTracker,
   ctx: RunContext | undefined,
-  onCell: (label: string) => void,
-): Promise<ArmResult> {
-  const cells: CellResult[] = [];
-  const allScores: QuestionScore[] = [];
-  let costUsd = 0;
-  let panelSize = 0;
+): Promise<void> {
+  const seats = arm.seatsFor(rotation);
+  arm.panelSize = seats.length;
 
-  for (let trial = 0; trial < trials; trial++) {
-    for (let rotation = 0; rotation < rotations; rotation++) {
-      const seats = seatsFor(rotation);
-      panelSize = seats.length;
-      for (const question of questions) {
-        const prompt = question.prompt + forcedChoiceSuffix(question);
-        const answers = await askPanel(seats, prompt, maxTokens, ctx);
+  const prompt = question.prompt + forcedChoiceSuffix(question);
+  const answers = await askPanel(seats, prompt, maxTokens, ctx);
 
-        for (const a of answers) {
-          if (!a.error) costUsd += tracker.recordUsage(a.model, a.inputTokens, a.outputTokens).cost;
-        }
-
-        const votes: Vote[] = answers.map(a =>
-          a.error
-            ? { panelist: a.panelist, role: a.role, extract: { status: 'no_match' as const }, error: a.error }
-            : { panelist: a.panelist, role: a.role, extract: extractVote(a.text, question) });
-
-        const score = scoreQuestion(question, votes);
-        cells.push({ trial, rotation, questionId: question.id, score });
-        allScores.push(score);
-        onCell(`${label} t${trial + 1}/r${rotation + 1} ${question.id}`);
-      }
-    }
+  for (const a of answers) {
+    if (!a.error) arm.costUsd += tracker.recordUsage(a.model, a.inputTokens, a.outputTokens).cost;
   }
 
-  return { label, report: buildReport(label, panelSize, allScores), cells, costUsd };
+  const votes: Vote[] = answers.map(a =>
+    a.error
+      ? { panelist: a.panelist, role: a.role, extract: { status: 'no_match' as const }, error: a.error }
+      : { panelist: a.panelist, role: a.role, extract: extractVote(a.text, question) });
+
+  const score = scoreQuestion(question, votes);
+  arm.cells.push({ trial, rotation, questionId: question.id, score });
+  arm.scores.push(score);
 }
 
 /**
@@ -243,17 +255,41 @@ export async function runExperiment(
     opts.onProgress?.(done, totalCells, label);
   };
 
-  const treatment = await runArm(
+  const treatmentArm = newArm(
     `multi-vendor panel (${configs.length} vendors)`,
     rotation => buildRotatedSeats(configs, ROUND1_BASE, rotation),
-    questions, trials, rotations, maxTokens, tracker, opts.ctx, onCell,
   );
-
-  const control = await runArm(
+  const controlArm = newArm(
     `single-vendor control (${opts.control})`,
     () => buildControlRotationSeats(controlConfig, ROUND1_BASE, roleCount),
-    questions, trials, rotations, maxTokens, tracker, opts.ctx, onCell,
   );
+
+  // The two arms are INTERLEAVED question by question, not run one after the
+  // other. Running them sequentially makes a wall-clock deadline structurally
+  // unfair: the first arm consumes the budget and the second is truncated, so
+  // the run dies holding a complete treatment arm and a partial control. That
+  // is the one shape of incomplete data a paired test cannot survive, because
+  // every unpaired cell is silently discarded and the surviving pairs are a
+  // biased subset (the questions that happened to run early).
+  //
+  // Interleaving makes any interruption symmetric: the arms stay within one
+  // cell of each other, so a truncated run yields fewer pairs rather than
+  // skewed ones. Observed directly - a sequential run spent 26 minutes on the
+  // treatment arm while the control vendor sat idle, and would have hit its
+  // deadline mid-control.
+  for (let trial = 0; trial < trials; trial++) {
+    for (let rotation = 0; rotation < rotations; rotation++) {
+      for (const question of questions) {
+        await runCell(treatmentArm, question, trial, rotation, maxTokens, tracker, opts.ctx);
+        onCell(`t${trial + 1}/r${rotation + 1} ${question.id} [multi]`);
+        await runCell(controlArm, question, trial, rotation, maxTokens, tracker, opts.ctx);
+        onCell(`t${trial + 1}/r${rotation + 1} ${question.id} [control]`);
+      }
+    }
+  }
+
+  const treatment = finishArm(treatmentArm);
+  const control = finishArm(controlArm);
 
   if (ownsTracker) tracker.flush();
 
