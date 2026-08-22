@@ -107,6 +107,54 @@ function ollamaBoard(): ProviderConfig[] {
   }));
 }
 
+/**
+ * Seat the board from ONE OpenAI-compatible endpoint, naming a different model
+ * per seat.
+ *
+ * This is the general form of "any model can be any board member". The other
+ * backends tie a seat to a vendor: the anthropic seat calls Anthropic, the xai
+ * seat calls xAI. Here a seat is just a name with a model string attached, so a
+ * board can mix vendors freely, or seat six models from one vendor, or put
+ * Claude in the CFO chair and Grok in the CEO chair, without touching roles.ts.
+ *
+ * Any gateway that speaks the OpenAI chat-completions API works: a local proxy,
+ * a self-hosted router, LiteLLM, or a vendor endpoint. Configure with:
+ *
+ *   BOARDROOM_GATEWAY_URL     base URL, e.g. http://host:8080/v1
+ *   BOARDROOM_GATEWAY_KEY     bearer token
+ *   BOARDROOM_GATEWAY_SEATS   comma-separated seat=model pairs
+ *
+ * Seat names are arbitrary. They are what the report calls each panelist, and
+ * they are what --compare selects, so they should be recognisable.
+ */
+function gatewayBoard(): ProviderConfig[] {
+  const baseUrl = (process.env.BOARDROOM_GATEWAY_URL || '').replace(/\/$/, '');
+  const apiKey = process.env.BOARDROOM_GATEWAY_KEY || '';
+  const spec = process.env.BOARDROOM_GATEWAY_SEATS || '';
+  if (!baseUrl || !spec) return [];
+
+  const seats: ProviderConfig[] = [];
+  for (const pair of spec.split(',')) {
+    const trimmed = pair.trim();
+    if (!trimmed) continue;
+    // Split on the FIRST '=' only: a model string may itself contain one.
+    const eq = trimmed.indexOf('=');
+    const name = (eq === -1 ? trimmed : trimmed.slice(0, eq)).trim();
+    const model = (eq === -1 ? trimmed : trimmed.slice(eq + 1)).trim();
+    if (!name || !model) continue;
+    seats.push({
+      name,
+      type: 'openai',
+      apiKey,
+      // A per-seat override still wins, so one seat can be repointed without
+      // rewriting the whole seat list.
+      model: process.env[seatModelEnv(name)] || model,
+      baseUrl,
+    });
+  }
+  return seats;
+}
+
 function openRouterBoard(): ProviderConfig[] {
   const key = process.env.OPENROUTER_API_KEY || '';
   const single = process.env.OPENROUTER_MODEL;
@@ -124,11 +172,16 @@ function openRouterBoard(): ProviderConfig[] {
 export function detectProviders(): ProviderConfig[] {
   const backend = (process.env.BOARDROOM_BACKEND || 'auto').toLowerCase();
 
+  if (backend === 'gateway') return gatewayBoard();
   if (backend === 'ollama') return ollamaBoard();
   if (backend === 'openrouter') return process.env.OPENROUTER_API_KEY ? openRouterBoard() : [];
   if (backend === 'keys') return detectKeyProviders();
 
-  // auto: explicit per-vendor keys win, then OpenRouter, then local Ollama.
+  // auto: an explicit seat list wins, then per-vendor keys, then OpenRouter,
+  // then local Ollama. The gateway goes first because configuring it is
+  // unambiguous intent: nobody sets a seat list by accident.
+  const gateway = gatewayBoard();
+  if (gateway.length > 0) return gateway;
   const keyed = detectKeyProviders();
   if (keyed.length > 0) return keyed;
   if (process.env.OPENROUTER_API_KEY) return openRouterBoard();

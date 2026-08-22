@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { boardroomDir } from '../util/home.js';
 import { logger } from '../util/logger.js';
 import { priceFor, costOf } from './catalog.js';
 
@@ -42,7 +42,7 @@ export class CostTracker {
   private pending: UsageEntry[] = [];
 
   constructor(budget: BudgetConfig = {}) {
-    const dir = join(homedir(), '.boardroom');
+    const dir = boardroomDir();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.dataPath = join(dir, 'usage.json');
     this.budget = budget;

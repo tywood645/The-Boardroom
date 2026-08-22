@@ -21,6 +21,56 @@ describe('splitSentences', () => {
   });
 });
 
+describe('extractVote: two options in one sentence', () => {
+  // Measured against six real vendors, this was the largest single source of
+  // discarded votes: on one corpus question 44.4% of all votes were dropped as
+  // ambiguous, across every vendor. Most were not ambiguous to a reader. The
+  // advisor complied with the format, opened with its choice, then named the
+  // option it had rejected in a trailing clause.
+  const terms = CORPUS.find(q => q.id === 'cap-02')!;    // strategic | financial
+
+  it('takes the vote from the main clause when the other option trails a dash', () => {
+    // Verbatim from claude-opus-5 during a pilot run.
+    const r = extractVote(
+      "**Financial VC** — that's the default answer, and the burden of proof sits on the strategic to overcome it.",
+      terms,
+    );
+    assert.equal(r.status, 'matched');
+    assert.equal(r.optionId, 'financial');
+    assert.equal(r.resolvedBy, 'main_clause');
+  });
+
+  it('handles a colon and a semicolon the same way', () => {
+    for (const sep of [':', ';']) {
+      const r = extractVote(`Raise now${sep} extend runway only if the round fails.`, capital);
+      assert.equal(r.status, 'matched', `separator ${sep} should resolve`);
+      assert.equal(r.optionId, 'raise');
+    }
+  });
+
+  it('stays ambiguous when both options sit in the main clause', () => {
+    // No trailing clause to demote, so there is no principled way to pick one.
+    // Guessing here would manufacture a vote that was never cast.
+    const r = extractVote('Raise now or extend runway, both are defensible here.', capital);
+    assert.equal(r.status, 'ambiguous');
+    assert.equal(r.reason, 'multiple_options');
+  });
+
+  it('does not treat a comma as a clause boundary', () => {
+    // Commas appear inside main clauses constantly. Demoting on a comma would
+    // discard real votes, so only dash, colon and semicolon count.
+    const r = extractVote('Raise now, before revenue slips further.', capital);
+    assert.equal(r.status, 'matched');
+    assert.equal(r.optionId, 'raise');
+    assert.equal(r.resolvedBy, undefined, 'a single-option sentence needs no resolution');
+  });
+
+  it('still refuses when the main clause itself names both options', () => {
+    const r = extractVote('Take the strategic investor over the financial VC — the premium is real.', terms);
+    assert.equal(r.status, 'ambiguous');
+  });
+});
+
 describe('extractVote', () => {
   it('reads a clean recommendation from the first sentence', () => {
     const r = extractVote('Raise now. The market window is open and momentum compounds.', capital);
@@ -87,9 +137,19 @@ describe('extractVote', () => {
     assert.equal(r.status, 'no_match');
   });
 
-  it('handles empty and whitespace-only text', () => {
-    assert.equal(extractVote('', capital).status, 'no_match');
-    assert.equal(extractVote('   \n  ', capital).status, 'no_match');
+  it('reports an empty answer as empty, not as unparseable', () => {
+    // These are different failures and must not share a bucket. A reasoning
+    // model that burns its whole budget on hidden reasoning returns no visible
+    // content: that is a panelist who did not speak. no_match means the
+    // panelist spoke and this code could not read it. Merging them hides an
+    // absent seat inside a statistic about extractor coverage.
+    assert.equal(extractVote('', capital).status, 'empty');
+    assert.equal(extractVote('   \n  ', capital).status, 'empty');
+    assert.equal(
+      extractVote('It depends entirely on what the board wants.', capital).status,
+      'no_match',
+      'real prose that matches nothing is still no_match',
+    );
   });
 
   it('is deterministic across repeated calls', () => {

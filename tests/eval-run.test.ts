@@ -1,6 +1,15 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { installMockFetch, restoreFetch, onFetch, anthropicSSE, openaiSSE, errorResponse } from './helpers/mock-fetch.ts';
+
+// A runEval call with no ctx builds its own CostTracker and flushes it, which
+// writes usage.json into the state directory. Without this redirect the eval
+// tests write into the developer's real ~/.boardroom.
+const evalTmpDir = mkdtempSync(join(tmpdir(), 'boardroom-eval-test-'));
+process.env.BOARDROOM_HOME = evalTmpDir;
 
 process.env.ANTHROPIC_API_KEY = 'test-key-anthropic';
 process.env.OPENAI_API_KEY = 'test-key-openai';
@@ -163,5 +172,10 @@ describe('selectQuestions', () => {
     assert.equal(selectQuestions('capital').length, 8);
     assert.equal(selectQuestions('capital', 3).length, 3);
     assert.equal(selectQuestions(undefined, 5).length, 5);
+  });
+
+  after(() => {
+    delete process.env.BOARDROOM_HOME;
+    rmSync(evalTmpDir, { recursive: true, force: true });
   });
 });
