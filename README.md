@@ -150,7 +150,7 @@ Collapsing "the evidence cannot tell" into "refuted" would let a thin run read a
 
 ## Architecture
 
-BoardRoom is roughly 4,800 lines of TypeScript across 39 source files, backed by a 133-test node:test suite. Four layers do the work.
+BoardRoom is roughly 6,000 lines of TypeScript across 45 source files, backed by a 206-test node:test suite. Four layers do the work.
 
 ### 1. Provider abstraction
 
@@ -232,6 +232,16 @@ You do not need six vendor keys. `BOARDROOM_BACKEND` selects how the board is se
   ```
   Override per seat with `BOARDROOM_OPENROUTER_<SEAT>`. Local models and any `:free` slug are tracked at zero cost.
 
+- **Any OpenAI-compatible gateway (any model in any seat).** The other backends tie a seat to a vendor. This one makes a seat what it should always have been, a **name plus a model string**, resolved against a single endpoint. Point it at a local proxy, LiteLLM, a self-hosted router, or any service speaking the OpenAI chat-completions API:
+  ```bash
+  export BOARDROOM_BACKEND=gateway
+  export BOARDROOM_GATEWAY_URL=http://localhost:8080/v1
+  export BOARDROOM_GATEWAY_KEY=...
+  export BOARDROOM_GATEWAY_SEATS='claude=claude-opus-5,gpt=gpt-5.6,grok=grok-4.6,glm=glm-5.2-max,kimi=k3,deepseek=deepseek-v4-pro'
+  boardroom eval --compare gpt --rotate
+  ```
+  Seat names are arbitrary and are what the report and `--compare` use. Nothing requires one vendor per seat, so you can seat six models from one vendor, run a board of four, or put Claude in the CFO chair and Grok in the CEO chair. `roles.ts` is untouched: this changes **who sits in a chair**, not what the chair asks. A single seat can still be repointed with `BOARDROOM_<SEAT>_MODEL`.
+
 ### Example commands
 
 ```bash
@@ -259,11 +269,19 @@ boardroom eval
 # Same corpus, one vendor in all six seats, then compare the two
 boardroom eval --compare anthropic
 
+# The full experiment: paired arms, rotated seats, a McNemar decision
+boardroom eval --compare anthropic --rotate
+
+# Add repetitions to see run-to-run variance
+boardroom eval --compare anthropic --rotate --trials 3
+
 # Smoke test the harness cheaply before a full run
 boardroom eval --category capital --limit 3
 ```
 
-Default response budgets are 1024 tokens per panelist in `ask` mode and 600 tokens per phase response in `motion` mode.
+`--rotate`, `--trials` and `--rotations` require `--compare`: without a control arm there is no premise to check, and accepting the flags anyway would let you believe you had run the balanced design. An inconclusive run exits **2** so CI can gate on it, while supported and refuted both exit 0, because a refuted premise is a successful measurement rather than a tool failure.
+
+Default response budgets are 1024 tokens per panelist in `ask` mode, 600 tokens per phase response in `motion` mode, and 1500 in `eval` (reasoning models need room before any visible text appears).
 
 ---
 
