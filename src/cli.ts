@@ -2,6 +2,8 @@ import { writeFileSync } from 'node:fs';
 import { Command } from 'commander';
 import { detectProviders } from './provider/factory.js';
 import { runEval } from './eval/run.js';
+import { runExperiment } from './eval/experiment.js';
+import { renderExperiment } from './eval/experiment-render.js';
 import { renderReport, renderComparison } from './eval/render.js';
 import { compareToControl } from './eval/divergence.js';
 import { CATEGORIES, type Category } from './eval/corpus.js';
@@ -117,6 +119,10 @@ export async function main(): Promise<void> {
     .option('--max-tokens <n>', 'Max tokens per panelist response', '512')
     .option('--control <vendor>', 'Seat ONE vendor in all six roles instead of the real panel')
     .option('--compare <vendor>', 'Run the panel AND a single-vendor control, then compare')
+    .option('--rotate', 'Sweep a Latin square of role assignments so vendor effects are not role effects')
+    .option('--trials <n>', 'Independent repetitions of the whole sweep, for run-to-run variance', '1')
+    .option('--rotations <n>', 'Rotations per trial (default: a full square over the detected vendors)')
+    .option('--threshold <rate>', 'Practical significance floor for the premise, as a rate', '0.10')
     .option('--json <path>', 'Write the full report to a JSON file')
     .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
     .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
@@ -126,6 +132,7 @@ export async function main(): Promise<void> {
     .action(async (cmdOpts: RunFlags & {
       category?: string; limit?: string; maxTokens: string;
       control?: string; compare?: string; json?: string;
+      rotate?: boolean; trials: string; rotations?: string; threshold: string;
     }) => {
       const configs = ensureConfigs();
 
@@ -135,6 +142,13 @@ export async function main(): Promise<void> {
       }
       if (cmdOpts.control && cmdOpts.compare) {
         console.error('--control and --compare are mutually exclusive.');
+        process.exit(1);
+      }
+      // Rotation and trials only mean something for a two-arm comparison: there
+      // is no premise to check without a control, and silently ignoring the
+      // flags would let someone believe they ran the hardened design.
+      if ((cmdOpts.rotate || cmdOpts.rotations || parseInt(cmdOpts.trials) > 1) && !cmdOpts.compare) {
+        console.error('--rotate, --rotations and --trials require --compare <vendor>.');
         process.exit(1);
       }
 
@@ -148,6 +162,32 @@ export async function main(): Promise<void> {
           process.stderr.write(`\r  ${done}/${total} ${id}          `);
         },
       };
+
+      // The hardened path: paired arms, rotated seats, repeated trials, and a
+      // McNemar decision. Chosen whenever the run is designed as an experiment
+      // rather than a single descriptive pass.
+      const trials = parseInt(cmdOpts.trials);
+      if (cmdOpts.compare && (cmdOpts.rotate || cmdOpts.rotations || trials > 1)) {
+        const result = await runExperiment(configs, {
+          ...base,
+          control: cmdOpts.compare,
+          trials,
+          rotations: cmdOpts.rotations ? parseInt(cmdOpts.rotations) : undefined,
+          threshold: parseFloat(cmdOpts.threshold),
+        });
+        process.stderr.write('\r');
+        renderExperiment(result);
+
+        if (cmdOpts.json) {
+          writeFileSync(cmdOpts.json, JSON.stringify(result, null, 2), 'utf-8');
+          console.log(`Report written to ${cmdOpts.json}`);
+        }
+        deadline.dispose();
+        tracker.flush();
+        // A refuted premise is a successful measurement, not a tool failure, so
+        // only an inconclusive run signals non-zero for a CI gate to catch.
+        process.exit(result.premise.verdict === 'inconclusive' ? 2 : 0);
+      }
 
       const panel = await runEval(configs, { ...base, control: cmdOpts.control });
       process.stderr.write('\r');
