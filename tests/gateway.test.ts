@@ -47,11 +47,11 @@ function configureGateway(seats: string): void {
 
 describe('gateway backend', () => {
   it('seats each name with its own model against one endpoint', () => {
-    configureGateway('claude=board-claude,grok=board-grok,glm=board-glm');
+    configureGateway('alpha=vendor-a/model-1,beta=vendor-b/model-2,gamma=vendor-c/model-3');
     const configs = detectProviders();
     assert.equal(configs.length, 3);
-    assert.deepEqual(configs.map(c => c.name), ['claude', 'grok', 'glm']);
-    assert.deepEqual(configs.map(c => c.model), ['board-claude', 'board-grok', 'board-glm']);
+    assert.deepEqual(configs.map(c => c.name), ['alpha', 'beta', 'gamma']);
+    assert.deepEqual(configs.map(c => c.model), ['vendor-a/model-1', 'vendor-b/model-2', 'vendor-c/model-3']);
     assert.ok(configs.every(c => c.baseUrl === 'http://gateway.invalid:8080/v1'));
     assert.ok(configs.every(c => c.type === 'openai'));
   });
@@ -79,12 +79,12 @@ describe('gateway backend', () => {
   });
 
   it('honours a per-seat model override', () => {
-    configureGateway('claude=board-claude');
-    process.env.BOARDROOM_CLAUDE_MODEL = 'something-else';
+    configureGateway('alpha=vendor-a/model-1');
+    process.env.BOARDROOM_ALPHA_MODEL = 'something-else';
     try {
       assert.equal(detectProviders()[0].model, 'something-else');
     } finally {
-      delete process.env.BOARDROOM_CLAUDE_MODEL;
+      delete process.env.BOARDROOM_ALPHA_MODEL;
     }
   });
 
@@ -125,7 +125,7 @@ describe('gateway boards rotate correctly', () => {
   });
 
   it('assigns real role prompts to gateway seats', () => {
-    configureGateway('claude=board-claude,grok=board-grok,glm=board-glm');
+    configureGateway('alpha=vendor-a/model-1,beta=vendor-b/model-2,gamma=vendor-c/model-3');
     const configs = detectProviders();
     const seats = buildRotatedSeats(configs, 'BASE::', 0);
     assert.equal(seats.length, 3);
