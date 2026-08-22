@@ -205,7 +205,13 @@ export async function runExperiment(
   configs: ProviderConfig[],
   opts: ExperimentOptions,
 ): Promise<ExperimentResult> {
-  const maxTokens = opts.maxTokens ?? 512;
+  // 1500, not 512. A reasoning model spends its budget on hidden reasoning
+  // before emitting any visible text: measured against real vendors, one model
+  // hit finish_reason=length after 1400 output tokens having produced 6425
+  // characters of reasoning and ZERO content. At 1500 the same model answers
+  // normally. A budget that silently starves a whole class of model does not
+  // measure the board, it measures the budget.
+  const maxTokens = opts.maxTokens ?? 1500;
   const trials = Math.max(1, opts.trials ?? 1);
   const questions = selectQuestions(opts.category, opts.limit);
   if (questions.length === 0) throw new Error('No questions selected.');

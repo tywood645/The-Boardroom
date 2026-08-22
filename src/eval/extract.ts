@@ -11,7 +11,7 @@
 
 import type { EvalQuestion } from './corpus.js';
 
-export type ExtractStatus = 'matched' | 'no_match' | 'ambiguous';
+export type ExtractStatus = 'matched' | 'no_match' | 'ambiguous' | 'empty';
 
 export interface ExtractResult {
   status: ExtractStatus;
@@ -155,10 +155,16 @@ function classify(window: string, question: EvalQuestion): ExtractResult | null 
  */
 export function extractVote(answerText: string, question: EvalQuestion): ExtractResult {
   const normalized = normalize(answerText);
-  if (!normalized) return { status: 'no_match' };
+  // An empty answer is reported separately from an unparseable one. A reasoning
+  // model can spend its entire token budget on hidden reasoning and return no
+  // visible content, and folding that into no_match hides a silently absent
+  // seat inside a statistic about extractor coverage. They are different
+  // failures: one is a panelist not speaking, the other is this code not
+  // understanding what it said.
+  if (!normalized) return { status: 'empty' };
 
   const sentences = splitSentences(normalized);
-  if (sentences.length === 0) return { status: 'no_match' };
+  if (sentences.length === 0) return { status: 'empty' };
 
   const first = classify(sentences[0], question);
   if (first) return { ...first, window: 'first_sentence' };

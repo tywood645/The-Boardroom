@@ -66,6 +66,8 @@ export interface DivergenceReport {
   parseRate: number;
   ambiguousVotes: number;
   noMatchVotes: number;
+  /** Answers that arrived with no visible text at all. */
+  emptyVotes: number;
   errorVotes: number;
   scoredQuestions: number;
   divergentQuestions: number;
@@ -123,6 +125,7 @@ export function buildReport(
   let parsedVotes = 0;
   let ambiguousVotes = 0;
   let noMatchVotes = 0;
+  let emptyVotes = 0;
   let errorVotes = 0;
 
   const vendorMap = new Map<string, VendorScore>();
@@ -145,6 +148,7 @@ export function buildReport(
         parsedVotes++;
       } else {
         if (v.extract.status === 'ambiguous') ambiguousVotes++;
+        else if (v.extract.status === 'empty') emptyVotes++;
         else noMatchVotes++;
         vs.parseFailures++;
         continue;
@@ -185,6 +189,7 @@ export function buildReport(
     parseRate: totalVotes > 0 ? parsedVotes / totalVotes : 0,
     ambiguousVotes,
     noMatchVotes,
+    emptyVotes,
     errorVotes,
     scoredQuestions: scored.length,
     divergentQuestions: divergent.length,

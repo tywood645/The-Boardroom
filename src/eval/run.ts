@@ -64,7 +64,8 @@ export async function runEval(
   configs: ProviderConfig[],
   opts: EvalOptions = {},
 ): Promise<EvalRunResult> {
-  const maxTokens = opts.maxTokens ?? 512;
+  // See experiment.ts: 512 starves reasoning models into empty answers.
+  const maxTokens = opts.maxTokens ?? 1500;
   const questions = selectQuestions(opts.category, opts.limit);
   if (questions.length === 0) throw new Error('No questions selected.');
 

@@ -21,7 +21,8 @@ function arm(report: DivergenceReport, costUsd: number, interval: Interval): voi
   console.log(`    scored          ${report.divergentQuestions} divergent of ${report.scoredQuestions} scored`);
   console.log(
     `    parse rate      ${pct(report.parseRate)}` +
-    `  (${report.ambiguousVotes} ambiguous, ${report.noMatchVotes} unmatched, ${report.errorVotes} errored)`,
+    `  (${report.ambiguousVotes} ambiguous, ${report.noMatchVotes} unmatched, ` +
+    `${report.emptyVotes} empty, ${report.errorVotes} errored)`,
   );
   console.log(`    minority share  ${pct(report.meanMinorityShare)} mean`);
   console.log(`    cost            $${costUsd.toFixed(4)}`);

@@ -116,7 +116,7 @@ export async function main(): Promise<void> {
     .description('Measure how often the board actually splits, over a fixed 30-question corpus')
     .option('--category <name>', 'Restrict to one category: capital, hiring, product, gtm')
     .option('--limit <n>', 'Run only the first N questions (smoke tests)')
-    .option('--max-tokens <n>', 'Max tokens per panelist response', '512')
+    .option('--max-tokens <n>', 'Max tokens per panelist response (reasoning models need room before any visible text)', '1500')
     .option('--control <vendor>', 'Seat ONE vendor in all six roles instead of the real panel')
     .option('--compare <vendor>', 'Run the panel AND a single-vendor control, then compare')
     .option('--rotate', 'Sweep a Latin square of role assignments so vendor effects are not role effects')

@@ -87,9 +87,19 @@ describe('extractVote', () => {
     assert.equal(r.status, 'no_match');
   });
 
-  it('handles empty and whitespace-only text', () => {
-    assert.equal(extractVote('', capital).status, 'no_match');
-    assert.equal(extractVote('   \n  ', capital).status, 'no_match');
+  it('reports an empty answer as empty, not as unparseable', () => {
+    // These are different failures and must not share a bucket. A reasoning
+    // model that burns its whole budget on hidden reasoning returns no visible
+    // content: that is a panelist who did not speak. no_match means the
+    // panelist spoke and this code could not read it. Merging them hides an
+    // absent seat inside a statistic about extractor coverage.
+    assert.equal(extractVote('', capital).status, 'empty');
+    assert.equal(extractVote('   \n  ', capital).status, 'empty');
+    assert.equal(
+      extractVote('It depends entirely on what the board wants.', capital).status,
+      'no_match',
+      'real prose that matches nothing is still no_match',
+    );
   });
 
   it('is deterministic across repeated calls', () => {
