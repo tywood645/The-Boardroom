@@ -1,10 +1,10 @@
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { boardroomDir } from '../util/home.js';
 import type { MotionResult } from './types.js';
 
 export function meetingsDir(): string {
-  const dir = join(homedir(), '.boardroom', 'meetings');
+  const dir = boardroomDir('meetings');
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }

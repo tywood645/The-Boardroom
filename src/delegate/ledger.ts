@@ -1,6 +1,6 @@
 import { appendFileSync, readFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { boardroomDir } from '../util/home.js';
 import { logger } from '../util/logger.js';
 import type { Tier } from '../cost/catalog.js';
 import type { TaskClass } from './classify.js';
@@ -52,7 +52,7 @@ export interface DelegationRecord {
 }
 
 export function ledgerPath(): string {
-  const dir = join(homedir(), '.boardroom');
+  const dir = boardroomDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   return join(dir, 'delegations.jsonl');
 }
