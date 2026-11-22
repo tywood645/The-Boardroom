@@ -13,6 +13,7 @@ import { writeMinutes } from './motion/minutes.js';
 import { appendDecision } from './state/store.js';
 import { buildRecallBlock } from './state/format.js';
 import { registerDelegate } from './cli/delegate.js';
+import { positive, positiveInt } from './cli/args.js';
 
 export async function main(): Promise<void> {
   const program = new Command()
@@ -35,8 +36,9 @@ export async function main(): Promise<void> {
     .option('--deadline <ms>', 'Wall-clock budget for the whole run', String(DEFAULT_DEADLINE_MS))
     .action(async (questionParts: string[], cmdOpts: RunFlags & { rounds: string; maxTokens: string; consultant: boolean; recall: boolean }) => {
       const question = questionParts.join(' ');
+      const maxTokens = positiveInt(cmdOpts.maxTokens, '--max-tokens');
       const configs = ensureConfigs();
-      const { ctx, tracker, deadline } = makeContext(cmdOpts);
+      const { ctx, deadline } = makeContext(cmdOpts);
       console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
       const rounds = parseInt(cmdOpts.rounds);
       if (rounds !== 1 && rounds !== 2) {
@@ -47,15 +49,15 @@ export async function main(): Promise<void> {
       if (recall) console.log('Loaded prior board context (' + recall.length + ' chars)');
       const result = await runBoardroom(configs, question, {
         rounds: rounds as 1 | 2,
-        maxTokens: parseInt(cmdOpts.maxTokens),
+        maxTokens,
         consultant: cmdOpts.consultant,
         recall,
         ctx,
       });
       renderBoardroom(result);
-      // process.exit skips async teardown, so persist usage before it runs.
+      // Usage is appended to the ledger as each call settles, so nothing is
+      // lost to process.exit, Ctrl-C or a crash.
       deadline.dispose();
-      tracker.flush();
       process.exit(0);
     });
 
@@ -73,15 +75,16 @@ export async function main(): Promise<void> {
     .option('--deadline <ms>', 'Wall-clock budget for the whole run', String(DEFAULT_DEADLINE_MS))
     .action(async (textParts: string[], cmdOpts: RunFlags & { maxTokens: string; consultant: boolean; recall: boolean }) => {
       const motion = textParts.join(' ');
+      const maxTokens = positiveInt(cmdOpts.maxTokens, '--max-tokens');
       const configs = ensureConfigs();
-      const { ctx, tracker, deadline } = makeContext(cmdOpts);
+      const { ctx, deadline } = makeContext(cmdOpts);
       console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
       console.log('Motion phases: brief → second → debate → vote → minutes');
       const recall = cmdOpts.recall === false ? null : buildRecallBlock();
       if (recall) console.log('Loaded prior board context (' + recall.length + ' chars)');
       console.log();
       const result = await runMotion(configs, motion, {
-        maxTokens: parseInt(cmdOpts.maxTokens),
+        maxTokens,
         consultant: cmdOpts.consultant,
         recall,
         ctx,
@@ -96,7 +99,6 @@ export async function main(): Promise<void> {
       }
       renderMotion(result);
       deadline.dispose();
-      tracker.flush();
       process.exit(0);
     });
 
@@ -119,11 +121,6 @@ interface RunFlags {
   weeklyCap?: string;
   concurrency?: string;
   deadline?: string;
-}
-
-function positive(raw: string | undefined, fallback: number): number {
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 /**

@@ -60,9 +60,12 @@ export class AnthropicProvider extends LLMProvider {
     // Consumers accumulate text outside this generator, so a retry after partial
     // output would leave them holding attempt-1's prefix plus all of attempt 2.
     let yieldedContent = false;
+    // Set once a response is accepted and its body opened, per attempt.
+    let streamStarted = false;
     let unlink: () => void = () => {};
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      streamStarted = false;
       try {
         const controller = new AbortController();
         // The run deadline aborts connect and body alike; the connect timer is
@@ -94,6 +97,7 @@ export class AnthropicProvider extends LLMProvider {
 
         const reader = response.body?.getReader();
         if (!reader) throw new ProviderError('No response body');
+        streamStarted = true;
 
         const decoder = new TextDecoder();
         let buffer = '';
@@ -131,6 +135,8 @@ export class AnthropicProvider extends LLMProvider {
         }
         lastError = e as Error;
         if (yieldedContent) throw lastError;
+        // The vendor accepted this attempt and may have billed its input.
+        if (streamStarted) yield { type: 'attempt_abandoned', attempt } as StreamEvent;
       } finally {
         unlink();
         unlink = () => {};

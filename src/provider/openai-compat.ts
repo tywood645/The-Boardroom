@@ -95,9 +95,12 @@ export class OpenAICompatProvider extends LLMProvider {
     // Consumers accumulate text outside this generator, so a retry after partial
     // output would leave them holding attempt-1's prefix plus all of attempt 2.
     let yieldedContent = false;
+    // Set once a response is accepted and its body opened, per attempt.
+    let streamStarted = false;
     let unlink: () => void = () => {};
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      streamStarted = false;
       try {
         const controller = new AbortController();
         // The run deadline aborts connect and body alike; the connect timer is
@@ -128,6 +131,7 @@ export class OpenAICompatProvider extends LLMProvider {
 
         const reader = response.body?.getReader();
         if (!reader) throw new ProviderError('No response body');
+        streamStarted = true;
 
         const decoder = new TextDecoder();
         const self = this;
@@ -136,8 +140,10 @@ export class OpenAICompatProvider extends LLMProvider {
         let currentToolCallId = '';
         let currentToolName = '';
         let hasEmittedStart = false;
-        let usageInputTokens = 0;
-        let usageOutputTokens = 0;
+        // Raw and unvalidated: collectStream decides whether to believe them.
+        // undefined means the vendor never reported a count.
+        let usageInputTokens: number | undefined;
+        let usageOutputTokens: number | undefined;
         let messageStartEmitted = false;
         let endEmitted = false;
 
@@ -189,8 +195,8 @@ export class OpenAICompatProvider extends LLMProvider {
           // Usage chunk (sent at end when stream_options.include_usage=true).
           // Some providers send a chunk with usage but no choices.
           if (chunk.usage) {
-            usageInputTokens = chunk.usage.prompt_tokens || chunk.usage.input_tokens || 0;
-            usageOutputTokens = chunk.usage.completion_tokens || chunk.usage.output_tokens || 0;
+            usageInputTokens = chunk.usage.prompt_tokens ?? chunk.usage.input_tokens;
+            usageOutputTokens = chunk.usage.completion_tokens ?? chunk.usage.output_tokens;
           }
 
           const delta = chunk.choices?.[0]?.delta;
@@ -260,6 +266,8 @@ export class OpenAICompatProvider extends LLMProvider {
         if (e instanceof ProviderError && e.statusCode && e.statusCode < 500 && e.statusCode !== 429) throw e;
         lastError = e as Error;
         if (yieldedContent) throw lastError;
+        // The vendor accepted this attempt and may have billed its input.
+        if (streamStarted) yield { type: 'attempt_abandoned', attempt } as StreamEvent;
       } finally {
         unlink();
         unlink = () => {};

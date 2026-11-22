@@ -10,6 +10,7 @@ import { renderDelegation, renderStats, renderVerifyCatalog } from '../delegate/
 import { verifyCatalog } from '../delegate/verify-catalog.js';
 import { isTaskClass, TASK_CLASSES, type TaskClass } from '../delegate/classify.js';
 import { TIERS, type Tier } from '../cost/catalog.js';
+import { positive, positiveInt } from './args.js';
 
 // delegate is the automated path, so it ships with caps on by default rather than
 // waiting for someone to remember to set them.
@@ -32,11 +33,6 @@ interface DelegateFlags {
   weeklyCap?: string;
   concurrency?: string;
   deadline?: string;
-}
-
-function positive(raw: string | undefined, fallback: number): number {
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 export function registerDelegate(program: Command): void {
@@ -119,6 +115,7 @@ export function registerDelegate(program: Command): void {
         minTier = flags.minTier as Tier;
       }
 
+      const maxTokens = positiveInt(flags.maxTokens, '--max-tokens');
       const budget = loadBudget(flags);
       const tracker = new CostTracker(budget);
       const deadline = new Deadline(positive(flags.deadline, DEFAULT_DEADLINE_MS), 'delegate');
@@ -137,7 +134,7 @@ export function registerDelegate(program: Command): void {
           taskClass,
           minTier,
           pin: flags.model,
-          maxTokens: parseInt(flags.maxTokens),
+          maxTokens,
           verify: flags.verify,
         });
 
@@ -145,12 +142,10 @@ export function registerDelegate(program: Command): void {
         else renderDelegation(result, Boolean(flags.explain));
 
         deadline.dispose();
-        tracker.flush();
         // A run that never produced an answer is a failure the shell should see.
         process.exit(result.answer ? 0 : 1);
       } catch (e: any) {
         deadline.dispose();
-        tracker.flush();
         console.error(e?.message || String(e));
         process.exit(1);
       }
