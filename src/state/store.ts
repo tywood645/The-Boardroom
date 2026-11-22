@@ -1,8 +1,11 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { boardroomDir } from '../util/paths.js';
 import type { MotionResult, FinalVote } from '../motion/types.js';
 import { logger } from '../util/logger.js';
+import { sanitizeForRecall } from '../util/sanitize.js';
+import { withFileLock } from '../util/lock.js';
 
 export interface DecisionRecord {
   id: string;                   // motion id (timestamp)
@@ -18,6 +21,9 @@ export interface StateData {
 }
 
 const MAX_DECISIONS = 20;       // keep last N to bound briefing size
+
+/** Bounds on what is persisted. These records are replayed into every later prompt. */
+export const RECALL_LIMITS = { motion: 500, role: 40, reason: 300, id: 40 } as const;
 
 const DEFAULT_CONTEXT_TEMPLATE = `# Standing Board Context
 
@@ -39,11 +45,7 @@ const DEFAULT_CONTEXT_TEMPLATE = `# Standing Board Context
 (decisions you've already made and don't want to keep debating)
 `;
 
-export function boardroomDir(): string {
-  const dir = join(homedir(), '.boardroom');
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
-}
+export { boardroomDir };
 
 export function contextPath(): string {
   return join(boardroomDir(), 'context.md');
@@ -93,13 +95,22 @@ export function loadState(): StateData {
   }
 }
 
+/**
+ * Load, prepend and write back under a lock, via a temp file and rename, so
+ * two motions finishing together cannot drop one another's decision and a
+ * crash mid-write cannot leave a truncated state.json.
+ */
 export function appendDecision(result: MotionResult): void {
+  withFileLock(statePath(), () => appendDecisionLocked(result));
+}
+
+function appendDecisionLocked(result: MotionResult): void {
   const data = loadState();
 
   const dissents = collectDissents(result.votes, result.outcome);
   const record: DecisionRecord = {
     id: result.id,
-    motion: result.motion,
+    motion: sanitizeForRecall(result.motion, RECALL_LIMITS.motion),
     outcome: result.outcome,
     tally: result.tally,
     dissents,
@@ -108,9 +119,11 @@ export function appendDecision(result: MotionResult): void {
 
   // Newest first; trim to MAX_DECISIONS.
   data.decisions = [record, ...data.decisions].slice(0, MAX_DECISIONS);
-  // mode applies only at creation; chmod also tightens pre-existing files.
-  writeFileSync(statePath(), JSON.stringify(data, null, 2), { mode: 0o600 });
-  chmodSync(statePath(), 0o600);
+  const target = statePath();
+  const tmp = `${target}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  // A fresh file, so mode 0o600 applies; rename keeps it.
+  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600, flag: 'wx' });
+  renameSync(tmp, target);
 }
 
 function collectDissents(
@@ -121,5 +134,8 @@ function collectDissents(
   const losingVote = outcome === 'passed' ? 'NAY' : 'AYE';
   return votes
     .filter(v => !v.error && v.vote === losingVote)
-    .map(v => ({ role: v.role, reason: v.reason }));
+    .map(v => ({
+      role: sanitizeForRecall(v.role, RECALL_LIMITS.role),
+      reason: sanitizeForRecall(v.reason, RECALL_LIMITS.reason),
+    }));
 }

@@ -121,17 +121,32 @@ function openRouterBoard(): ProviderConfig[] {
   }));
 }
 
-export function detectProviders(): ProviderConfig[] {
+export type Backend = 'keys' | 'openrouter' | 'ollama' | 'none';
+
+/**
+ * Which backend the current environment selects. The one place this is
+ * decided: detectProviders seats the board from it, and the price table uses
+ * it to decide whether a model can be free (see isFree in cost/catalog.ts).
+ */
+export function activeBackend(): Backend {
   const backend = (process.env.BOARDROOM_BACKEND || 'auto').toLowerCase();
 
-  if (backend === 'ollama') return ollamaBoard();
-  if (backend === 'openrouter') return process.env.OPENROUTER_API_KEY ? openRouterBoard() : [];
-  if (backend === 'keys') return detectKeyProviders();
+  if (backend === 'ollama') return 'ollama';
+  if (backend === 'openrouter') return process.env.OPENROUTER_API_KEY ? 'openrouter' : 'none';
+  if (backend === 'keys') return detectKeyProviders().length > 0 ? 'keys' : 'none';
 
   // auto: explicit per-vendor keys win, then OpenRouter, then local Ollama.
-  const keyed = detectKeyProviders();
-  if (keyed.length > 0) return keyed;
-  if (process.env.OPENROUTER_API_KEY) return openRouterBoard();
-  if (process.env.OLLAMA_HOST) return ollamaBoard();
-  return [];
+  if (detectKeyProviders().length > 0) return 'keys';
+  if (process.env.OPENROUTER_API_KEY) return 'openrouter';
+  if (process.env.OLLAMA_HOST) return 'ollama';
+  return 'none';
+}
+
+export function detectProviders(): ProviderConfig[] {
+  switch (activeBackend()) {
+    case 'keys': return detectKeyProviders();
+    case 'openrouter': return openRouterBoard();
+    case 'ollama': return ollamaBoard();
+    case 'none': return [];
+  }
 }

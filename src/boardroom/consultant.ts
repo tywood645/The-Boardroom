@@ -2,6 +2,7 @@ import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
 import { collectStream } from '../provider/collect.js';
 import type { RunContext } from '../provider/collect.js';
+import { quoteUntrusted, QUOTED_NOTE } from '../util/sanitize.js';
 
 export interface ConsultantBriefing {
   text: string;
@@ -61,12 +62,23 @@ export async function consultBriefing(
   }
 }
 
+/** Upper bound on briefing text quoted into advisor prompts. The consultant is asked for 250 words. */
+const MAX_BRIEFING_CHARS = 6000;
+
+/**
+ * The briefing as a block for an advisor's prompt. Its text comes from a model
+ * summarising web pages, so it is quoted line by line (see quoteUntrusted) and
+ * cannot close the block or pose as the question that follows it.
+ */
+export function briefingBlock(briefing: ConsultantBriefing | null, heading: string): string {
+  if (!briefing) return '';
+  return `${heading}\n${QUOTED_NOTE}\n${quoteUntrusted(briefing.text, MAX_BRIEFING_CHARS)}\n\n--- end briefing ---\n\n`;
+}
+
 export function applyBriefing(question: string, briefing: ConsultantBriefing | null): string {
   if (!briefing) return question;
   return (
-    `CONSULTANT BRIEFING (current, prepared by the board's consultant via web search):\n` +
-    `${briefing.text}\n\n` +
-    `--- end briefing ---\n\n` +
+    briefingBlock(briefing, `CONSULTANT BRIEFING (current, prepared by the board's consultant via web search):`) +
     `QUESTION:\n${question}`
   );
 }

@@ -1,4 +1,6 @@
 import { logger } from '../util/logger.js';
+import { BoardRoomError } from '../util/error.js';
+import { activeBackend, type Backend } from '../provider/factory.js';
 
 /**
  * Model catalog: the single table that both prices a call and places a model in
@@ -84,29 +86,94 @@ export function canonicalModel(model: string): string {
   return ALIASES[model] ?? model;
 }
 
-/** Applied to any model absent from the catalog. Deliberately pessimistic. */
-export const DEFAULT_PRICING = { input: 3.0, output: 15.0 };
-
-/** Local (Ollama) default models and any OpenRouter ':free' slug cost nothing. */
-const FREE_LOCAL_MODELS = new Set(['llama3.1', 'qwen2.5', 'deepseek-r1', 'mistral', 'gemma2', 'phi3']);
-
-export function isFree(model: string): boolean {
-  return model.endsWith(':free') || FREE_LOCAL_MODELS.has(model);
+/**
+ * The catalog key a model string prices as.
+ *
+ * Gateways wrap the vendor's ID: OpenRouter serves `anthropic/claude-fable-5`
+ * and variants such as `...:nitro`. Looking those up verbatim always missed,
+ * so every gateway call fell to the fallback price, which for frontier models
+ * was a third of the real one. The vendor prefix and variant suffix are
+ * stripped for the lookup only; the wire still carries the full string.
+ */
+export function catalogKey(model: string): string {
+  const base = model.slice(model.lastIndexOf('/') + 1).split(':')[0];
+  return canonicalModel(base);
 }
 
-// A model priced by the fallback is silently mispriced, which is exactly the
-// failure this table exists to prevent. Warn once per unknown model per process.
+function catalogSpec(model: string): ModelSpec | undefined {
+  const key = catalogKey(model);
+  // Own keys only: "constructor" and friends must not resolve to Object.prototype.
+  return Object.prototype.hasOwnProperty.call(CATALOG, key) ? CATALOG[key] : undefined;
+}
+
+/**
+ * Applied to any model absent from the catalog: the highest input and output
+ * price the catalog carries. A cap can only hold if an unknown model is never
+ * priced below what it might really cost, and the old flat $3/$15 was under
+ * every frontier model. Name the model's real price in BOARDROOM_MODEL_PRICES
+ * to replace this.
+ */
+export const DEFAULT_PRICING = {
+  input: Math.max(...Object.values(CATALOG).map(s => s.input)),
+  output: Math.max(...Object.values(CATALOG).map(s => s.output)),
+};
+
+/** Ollama's default seat models. */
+const FREE_LOCAL_MODELS = new Set(['llama3.1', 'qwen2.5', 'deepseek-r1', 'mistral', 'gemma2', 'phi3']);
+
+/**
+ * Whether a model costs nothing on the backend in use.
+ *
+ * Decided by backend, not by name alone: a model merely called "mistral", or
+ * ending ":free", is not free when it is being sent to a paid vendor.
+ *  - ollama: everything is local and free, except a catalog-named model, which
+ *    keeps its catalog price in case OLLAMA_HOST fronts a paid gateway.
+ *  - openrouter: only its ":free" variants.
+ *  - per-vendor keys: nothing.
+ */
+export function isFree(model: string, backend: Backend = activeBackend()): boolean {
+  if (backend === 'ollama') return FREE_LOCAL_MODELS.has(model) || !catalogSpec(model);
+  if (backend === 'openrouter') return model.endsWith(':free');
+  return false;
+}
+
+/**
+ * Operator-declared prices for models the catalog does not carry:
+ *   BOARDROOM_MODEL_PRICES="meta-llama/llama-3.1-8b-instruct=0.02/0.05,other=1/4"
+ * USD per 1M tokens, input/output. A malformed entry is an error, not a
+ * silent fallback: this table feeds the budget gate.
+ */
+export function parseModelPrices(raw: string | undefined): Map<string, { input: number; output: number }> {
+  const out = new Map<string, { input: number; output: number }>();
+  for (const entry of (raw ?? '').split(',').map(e => e.trim()).filter(Boolean)) {
+    const m = entry.match(/^(.+)=(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);
+    if (!m) {
+      throw new BoardRoomError(
+        `BOARDROOM_MODEL_PRICES entry "${entry}" must look like model=input/output (USD per 1M tokens)`,
+        'INVALID_ARGUMENT',
+      );
+    }
+    out.set(m[1].trim(), { input: Number(m[2]), output: Number(m[3]) });
+  }
+  return out;
+}
+
+// A model priced by the fallback is mispriced upward: safe for a cap, wrong on
+// the report. Warn once per unknown model per process.
 const warnedUnknown = new Set<string>();
 
 export function priceFor(model: string): { input: number; output: number } {
-  const spec = CATALOG[canonicalModel(model)];
-  if (spec) return { input: spec.input, output: spec.output };
+  const declared = parseModelPrices(process.env.BOARDROOM_MODEL_PRICES).get(model);
+  if (declared) return declared;
   if (isFree(model)) return { input: 0, output: 0 };
+  const spec = catalogSpec(model);
+  if (spec) return { input: spec.input, output: spec.output };
   if (!warnedUnknown.has(model)) {
     warnedUnknown.add(model);
     logger.warn(
-      `No catalog entry for "${model}"; pricing it at the default ` +
-        `$${DEFAULT_PRICING.input}/$${DEFAULT_PRICING.output} per 1M. Reported cost may be wrong.`,
+      `No catalog entry for "${model}"; pricing it at the catalog maximum ` +
+        `$${DEFAULT_PRICING.input}/$${DEFAULT_PRICING.output} per 1M so caps still hold. ` +
+        `Set BOARDROOM_MODEL_PRICES="${model}=<in>/<out>" to use its real price.`,
     );
   }
   return DEFAULT_PRICING;

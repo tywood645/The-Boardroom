@@ -48,6 +48,13 @@ export type StreamEvent =
   // input_tokens is optional and authoritative when present. OpenAI-compatible
   // streams report usage only at the end, after message_start has already been
   // emitted, so the terminal message_delta is the only place they can carry it.
-  | { type: 'message_delta'; delta: { stop_reason: string }; usage: { output_tokens: number; input_tokens?: number } }
+  //
+  // Both counts are untrusted: collectStream validates them, and an absent or
+  // invalid output_tokens means "not reported", never "zero".
+  | { type: 'message_delta'; delta: { stop_reason: string }; usage: { output_tokens?: number; input_tokens?: number } }
   | { type: 'message_stop' }
+  // A started attempt (the vendor accepted the request and opened a stream)
+  // that ended before any content and is being retried or abandoned. The
+  // vendor may already have billed its input, so collectStream charges for it.
+  | { type: 'attempt_abandoned'; attempt: number }
   | { type: 'error'; error: { type: string; message: string } };

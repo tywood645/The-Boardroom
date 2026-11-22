@@ -1,6 +1,6 @@
-import { appendFileSync, readFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
+import { appendFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { boardroomDir } from '../util/paths.js';
 import { logger } from '../util/logger.js';
 import type { Tier } from '../cost/catalog.js';
 import type { TaskClass } from './classify.js';
@@ -8,11 +8,10 @@ import type { TaskClass } from './classify.js';
 /**
  * Append-only record of what the delegator did and whether it worked.
  *
- * Kept separate from usage.json on purpose. usage.json is the billing ledger,
- * filtered over a 30-day window and rewritten wholesale; this needs a longer
- * window to accumulate enough samples per (class, tier) cell, has a
- * per-attempt schema that means nothing to billing, and is written far more
- * often. JSONL makes each write O(1) instead of a full-file rewrite.
+ * Kept separate from the billing ledger (~/.boardroom/usage/) on purpose.
+ * That one keeps two months and records holds and settlements; this needs a
+ * longer window to accumulate enough samples per (class, tier) cell and has a
+ * per-attempt schema that means nothing to billing.
  *
  * This file is what "measured delegation" is measured from. Without it the
  * tier priors would be guesses that never get corrected.
@@ -52,9 +51,7 @@ export interface DelegationRecord {
 }
 
 export function ledgerPath(): string {
-  const dir = join(homedir(), '.boardroom');
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return join(dir, 'delegations.jsonl');
+  return join(boardroomDir(), 'delegations.jsonl');
 }
 
 export function appendDelegation(record: DelegationRecord): void {

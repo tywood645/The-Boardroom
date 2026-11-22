@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import type { MotionResult } from './types.js';
+import { quorumStatement } from './minutes.js';
 
 /**
  * Total spend for a motion. Every phase now carries its own recorded cost, so
@@ -38,6 +39,16 @@ export function renderMotion(r: MotionResult): void {
   const validSeconds = r.seconds.filter(s => s.seconded && !s.error).length;
   console.log(chalk.dim(`  (${validSeconds} seconds)`));
   console.log();
+
+  if (r.outcome === 'no_quorum' && r.quorum?.phase === 'second') {
+    console.log(chalk.bold.red('NO QUORUM. NOTHING DECIDED.'));
+    console.log(chalk.dim(quorumStatement(r)));
+    console.log(chalk.dim(`Total motion cost: $${motionCost(r).toFixed(4)}`));
+    if (r.minutesPath) {
+      console.log(chalk.dim('Minutes: ' + r.minutesPath));
+    }
+    return;
+  }
 
   if (r.outcome === 'died_for_lack_of_second') {
     console.log(chalk.bold.red('MOTION DIED FOR LACK OF SECOND.'));
@@ -84,8 +95,10 @@ export function renderMotion(r: MotionResult): void {
   const banner =
     r.outcome === 'passed' ? chalk.bold.green('  MOTION PASSED  ') :
     r.outcome === 'failed' ? chalk.bold.red('  MOTION FAILED  ') :
+    r.outcome === 'no_quorum' ? chalk.bold.red('  NO QUORUM: NOTHING DECIDED  ') :
     chalk.bold.yellow('  MOTION TIED: CHAIR MUST DECIDE  ');
   console.log(banner);
+  if (r.outcome === 'no_quorum') console.log(chalk.dim(quorumStatement(r)));
   console.log();
 
   console.log(chalk.dim(`Total motion cost: $${motionCost(r).toFixed(4)}`));

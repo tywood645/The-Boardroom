@@ -1,21 +1,22 @@
 import type { LLMProvider } from './base.js';
 import type { MessageCreateParams } from './types.js';
-import type { CostTracker } from '../cost/tracker.js';
+import type { CostTracker, Hold } from '../cost/tracker.js';
 import type { Semaphore } from '../util/semaphore.js';
 import { costOf } from '../cost/catalog.js';
-import { BudgetError, ProviderError } from '../util/error.js';
+import { BoardRoomError, BudgetError, DeadlineError, ProviderError } from '../util/error.js';
 
 /**
  * The single place a provider stream is consumed.
  *
- * Three near-identical drain loops used to live in panel.ts, consultant.ts and
- * motion/protocol.ts. Collapsing them here fixes token accounting once instead
- * of three times, and — more importantly — creates one choke point that every
- * provider call must pass through, so budget, concurrency and deadline limits
- * are enforced rather than advised.
- *
- * A test in tests/enforcement-invariant.test.ts asserts that this is the only
+ * Every provider call passes through here, so budget, concurrency and
+ * deadline limits are enforced rather than advised. A test in
+ * tests/enforcement-invariant.test.ts asserts that this is the only
  * non-provider file that calls createMessage().
+ *
+ * Accounting contract: before dispatch the call's worst case is held against
+ * every cap; afterwards the hold is settled to what the call cost, on success
+ * and on failure alike. Where the vendor does not report a count, or reports
+ * one that cannot be right, a conservative upper bound is charged instead.
  */
 
 export interface Collected {
@@ -28,8 +29,10 @@ export interface Collected {
   ttfbMs: number;
   vendor: string;
   model: string;
-  /** True when inputTokens came from a character estimate, not the provider. */
+  /** True when inputTokens came from an upper-bound estimate, not the provider. */
   estimatedInput: boolean;
+  /** True when outputTokens came from an upper-bound estimate, not the provider. */
+  estimatedOutput: boolean;
 }
 
 /**
@@ -45,13 +48,42 @@ export interface RunContext {
   signal?: AbortSignal;
 }
 
-/** Rough token estimate for budgeting only. Never reported as actual usage. */
+/** No single call reports more than this; a larger count is not believed. */
+export const MAX_PLAUSIBLE_TOKENS = 10_000_000;
+
+/** Generous ceiling on output bytes per token; typical text is about 4. See maxTextBytes. */
+export const MAX_BYTES_PER_TOKEN = 64;
+
+/** Role markers, separators and similar framing each message costs on top of its text. */
+const PER_MESSAGE_OVERHEAD = 16;
+
+/** A provider-reported token count is trusted only if it is a plausible non-negative integer. */
+export function validTokenCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= MAX_PLAUSIBLE_TOKENS;
+}
+
+/**
+ * Upper bound on the tokens a piece of text can encode to.
+ *
+ * Every tokenizer the catalog's vendors use is byte-level or has byte
+ * fallback, so a token covers at least one byte of UTF-8. Byte length is
+ * therefore a ceiling, whatever the script or entropy of the text. The old
+ * estimate, characters / 4, was an average and could be beaten by 8x with
+ * token-dense input, which let a single call blow through a hard cap.
+ */
+export function upperBoundTokens(text: string): number {
+  return Buffer.byteLength(text, 'utf-8');
+}
+
+/** Upper bound on a request's input tokens. Used to reserve, and as the fallback charge. */
 export function estimateTokens(params: MessageCreateParams): number {
-  const messageChars = params.messages.reduce((n, m) => {
-    if (typeof m.content === 'string') return n + m.content.length;
-    return n + m.content.reduce((k, b) => k + JSON.stringify(b).length, 0);
-  }, 0);
-  return Math.ceil((params.system.length + messageChars) / 4);
+  let n = upperBoundTokens(params.system) + PER_MESSAGE_OVERHEAD;
+  for (const m of params.messages) {
+    n += PER_MESSAGE_OVERHEAD;
+    n += typeof m.content === 'string' ? upperBoundTokens(m.content) : upperBoundTokens(JSON.stringify(m.content));
+  }
+  if (params.tools.length > 0) n += upperBoundTokens(JSON.stringify(params.tools));
+  return n;
 }
 
 export async function collectStream(
@@ -59,8 +91,8 @@ export async function collectStream(
   params: MessageCreateParams,
   ctx: RunContext = {},
 ): Promise<Collected> {
-  // Wait for a slot before checking the budget, so the gate sees spend that
-  // concurrent calls have already committed rather than a stale total.
+  // Wait for a slot before checking the budget, so the gate sees holds that
+  // concurrent calls have already taken.
   const release = ctx.limiter ? await ctx.limiter.acquire() : () => {};
   try {
     return await dispatch(provider, params, ctx);
@@ -69,72 +101,169 @@ export async function collectStream(
   }
 }
 
+/** Resolve when `p` does, or reject with the signal's reason if it aborts first. */
+function untilAborted<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      v => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      e => { signal.removeEventListener('abort', onAbort); reject(e); },
+    );
+  });
+}
+
+/**
+ * Take a hold for the call's worst case. If the only thing in the way is this
+ * run's other in-flight calls, wait for one of them to settle (their holds
+ * shrink to actual cost) and ask again, rather than refusing a call that will
+ * fit.
+ */
+async function acquireHold(
+  tracker: CostTracker,
+  provider: LLMProvider,
+  model: string,
+  estIn: number,
+  maxOut: number,
+  signal?: AbortSignal,
+): Promise<Hold> {
+  for (;;) {
+    const r = tracker.reserve(model, estIn, maxOut);
+    if (r.hold) return r.hold;
+    if (r.blockedByInFlight) {
+      await untilAborted(tracker.waitForSettle(), signal);
+      continue;
+    }
+    const alert = r.alert!;
+    throw new BudgetError(
+      `${alert.message} ($${alert.currentSpend.toFixed(4)} of $${alert.cap.toFixed(2)}); ` +
+        `refusing to dispatch to ${provider.name}/${model}`,
+      alert.currentSpend,
+      alert.cap,
+    );
+  }
+}
+
 async function dispatch(
   provider: LLMProvider,
   params: MessageCreateParams,
   ctx: RunContext,
 ): Promise<Collected> {
+  if (!Number.isSafeInteger(params.maxTokens) || params.maxTokens <= 0) {
+    throw new BoardRoomError(`maxTokens must be a positive integer, got ${params.maxTokens}`, 'INVALID_ARGUMENT');
+  }
+  const signal = ctx.signal ?? params.signal;
+  if (signal?.aborted) throw signal.reason;
+
   const model = params.model || provider.modelId;
   const { tracker } = ctx;
+  const estIn = estimateTokens(params);
 
   // Pre-dispatch gate. This runs before fetch, which is the whole point:
   // recording usage afterwards can report an overrun but cannot prevent one.
-  if (tracker) {
-    const alert = tracker.reserve(model, estimateTokens(params), params.maxTokens);
-    if (alert?.type === 'blocked') {
-      throw new BudgetError(
-        `${alert.message} ($${alert.currentSpend.toFixed(4)} of $${alert.cap.toFixed(2)}); ` +
-          `refusing to dispatch to ${provider.name}/${model}`,
-        alert.currentSpend,
-        alert.cap,
-      );
-    }
-  }
+  const hold = tracker ? await acquireHold(tracker, provider, model, estIn, params.maxTokens, signal) : undefined;
 
   const start = Date.now();
   let text = '';
   let ttfbMs = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
+  let reportedIn: number | null = null;
+  let reportedOut: number | null = null;
+  let sawContent = false;
+  let abandoned = 0;
+  let textBytes = 0;
+  let overflowed = false;
+  // No tokenizer averages anywhere near this many bytes per token, so text
+  // past this was not produced within max_tokens: the vendor is ignoring it.
+  const maxTextBytes = params.maxTokens * MAX_BYTES_PER_TOKEN + 4096;
 
-  const stream = provider.createMessage({ ...params, signal: ctx.signal ?? params.signal });
+  /** What this call is charged: authoritative counts where valid, upper bounds where not. */
+  const tally = () => {
+    const estimatedInput = reportedIn === null;
+    const estimatedOutput = reportedOut === null;
+    const thisAttemptIn = reportedIn ?? estIn;
+    // Each abandoned attempt sent the same prompt; the vendor may have billed it.
+    const inputTokens = thisAttemptIn + abandoned * estIn;
+    // With no reported count, charge the text's upper bound. It is capped at
+    // maxTokens because the vendor enforces that limit, unless this very
+    // response proved it does not, in which case there is no cap to trust.
+    const bound = upperBoundTokens(text);
+    const outputTokens = reportedOut ?? (overflowed ? bound : Math.min(params.maxTokens, bound));
+    return { inputTokens, outputTokens, estimatedInput, estimatedOutput };
+  };
 
-  for await (const ev of stream) {
-    switch (ev.type) {
-      case 'message_start':
-        // Authoritative on the Anthropic path. On OpenAI-compatible streams this
-        // fires before the usage chunk exists, so it carries 0 and is ignored.
-        if (ev.message.usage.input_tokens > 0) inputTokens = ev.message.usage.input_tokens;
-        break;
-      case 'content_block_delta':
-        if (ev.delta.type === 'text_delta') {
-          if (ttfbMs === 0) ttfbMs = Date.now() - start;
-          text += ev.delta.text;
+  const charge = (inputTokens: number, outputTokens: number): number =>
+    hold && tracker
+      ? tracker.settle(hold, model, inputTokens, outputTokens).cost
+      : costOf(model, inputTokens, outputTokens);
+
+  try {
+    const stream = provider.createMessage({ ...params, signal });
+    for await (const ev of stream) {
+      switch (ev.type) {
+        case 'message_start': {
+          // Authoritative on the Anthropic path. OpenAI-compatible streams send
+          // 0 here (usage arrives at the end), and 0 input is never real.
+          const n = ev.message?.usage?.input_tokens;
+          if (validTokenCount(n) && n > 0) reportedIn = n;
+          break;
         }
-        break;
-      case 'message_delta':
-        outputTokens = ev.usage.output_tokens;
-        // Emitted after the usage chunk has been parsed, so this is the only
-        // trustworthy source of input tokens on OpenAI-compatible streams.
-        if (ev.usage.input_tokens) inputTokens = ev.usage.input_tokens;
-        break;
-      case 'error':
-        throw new ProviderError(ev.error.message);
+        case 'content_block_delta':
+          if (ev.delta.type === 'text_delta') {
+            if (ttfbMs === 0) ttfbMs = Date.now() - start;
+            sawContent = true;
+            const piece = typeof ev.delta.text === 'string' ? ev.delta.text : String(ev.delta.text ?? '');
+            text += piece;
+            textBytes += Buffer.byteLength(piece, 'utf-8');
+            if (textBytes > maxTextBytes) {
+              // Stop reading: an unbounded stream is unbounded memory here and
+              // unbounded spend there. Leaving the loop cancels the transfer.
+              overflowed = true;
+              throw new ProviderError(
+                `${provider.name}/${model} sent over ${maxTextBytes} bytes for max_tokens=${params.maxTokens}; ` +
+                  `it is not honouring the output limit, so the stream was cut off`,
+              );
+            }
+          }
+          break;
+        case 'message_delta': {
+          const out = ev.usage?.output_tokens;
+          if (validTokenCount(out)) reportedOut = out;
+          const inp = ev.usage?.input_tokens;
+          if (validTokenCount(inp) && inp > 0) reportedIn = inp;
+          break;
+        }
+        case 'attempt_abandoned':
+          // Counts reported so far belonged to the dropped attempt, which is
+          // charged at the estimate instead; the next attempt reports afresh.
+          abandoned++;
+          reportedIn = null;
+          reportedOut = null;
+          break;
+        case 'error':
+          throw new ProviderError(ev.error.message);
+      }
     }
+  } catch (e) {
+    // Charge what a failed call plausibly cost. A started stream or a deadline
+    // abort means the vendor had the request; a rejection before any stream
+    // (4xx, connect failure, every retry refused) means it billed nothing.
+    if (hold && !hold.closed) {
+      const started = sawContent || reportedIn !== null || reportedOut !== null || e instanceof DeadlineError;
+      if (started || abandoned > 0) {
+        const t = tally();
+        const inputTokens = started ? t.inputTokens : abandoned * estIn;
+        charge(inputTokens, started ? t.outputTokens : 0);
+      } else {
+        tracker!.release(hold);
+      }
+    }
+    throw e;
   }
 
-  // Not every OpenAI-compatible vendor honours stream_options.include_usage. A
-  // vendor that never sends usage would otherwise report a free call, so fall
-  // back to the estimate and mark it, keeping budget math conservative.
-  let estimatedInput = false;
-  if (inputTokens === 0) {
-    inputTokens = estimateTokens(params);
-    estimatedInput = true;
-  }
-
-  const cost = tracker
-    ? tracker.recordUsage(model, inputTokens, outputTokens).cost
-    : costOf(model, inputTokens, outputTokens);
+  const { inputTokens, outputTokens, estimatedInput, estimatedOutput } = tally();
+  const cost = charge(inputTokens, outputTokens);
 
   return {
     text: text.trim(),
@@ -146,5 +275,6 @@ async function dispatch(
     vendor: provider.name,
     model,
     estimatedInput,
+    estimatedOutput,
   };
 }

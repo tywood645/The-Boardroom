@@ -29,6 +29,14 @@ export interface ResolveOptions {
   exclude?: string[];
   /** Restrict to these vendors (used for research, which needs a web-grounded model). */
   onlyVendors?: string[];
+  /**
+   * Skip the flag and env pins and resolve from the catalog. A pin names the
+   * model that does the work; the checker must be a different one, and
+   * honouring the pin for it resolved straight back to the model under check.
+   */
+  ignorePins?: boolean;
+  /** Within a tier, take a model from any other vendor before one from this vendor. */
+  avoidVendor?: string;
 }
 
 const ENV_BY_TIER: Record<Tier, string> = {
@@ -70,7 +78,7 @@ export function resolveTier(
   const byVendor = new Map(configs.map(c => [c.name, c]));
   const excluded = new Set(opts.exclude ?? []);
 
-  const override = pin ?? process.env[ENV_BY_TIER[tier]];
+  const override = opts.ignorePins ? undefined : pin ?? process.env[ENV_BY_TIER[tier]];
   if (override) {
     const { vendor, model } = parsePin(override);
     const config = byVendor.get(vendor);
@@ -101,7 +109,9 @@ export function resolveTier(
       return true;
     });
 
-    const best = candidates[0];
+    // Cheapest first, but another vendor's model outranks a same-vendor sibling.
+    const best =
+      (opts.avoidVendor && candidates.find(c => c.spec.vendor !== opts.avoidVendor)) || candidates[0];
     if (!best) continue;
 
     const resolution: Resolution = {

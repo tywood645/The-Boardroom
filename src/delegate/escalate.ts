@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
 import { collectStream, type RunContext, type Collected } from '../provider/collect.js';
@@ -63,6 +64,13 @@ export interface DelegateResult {
   attempts: Attempt[];
   /** The answer that was accepted, or the best one reached before stopping. */
   answer: string;
+  /**
+   * How the attempt that produced `answer` was judged, or null with no answer.
+   * Differs from finalOutcome when a later attempt failed: the run then ends
+   * 'error' or 'budget_blocked' while still returning an earlier answer, which
+   * may be one the checker refuted.
+   */
+  answerOutcome: Outcome | null;
   finalOutcome: Outcome;
   totalCost: number;
   stoppedBecause?: string;
@@ -109,7 +117,8 @@ export async function delegate(
   const startWhy =
     startTier === picked.tier ? picked.why : `${picked.why}; raised to ${startTier} by --min-tier`;
 
-  const runId = `${Date.now().toString(36)}-${cls}`;
+  // Stats group attempts by run, so ids from parallel processes must not collide.
+  const runId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}-${cls}`;
   const result: DelegateResult = {
     task,
     cls,
@@ -118,6 +127,7 @@ export async function delegate(
     startWhy,
     attempts: [],
     answer: '',
+    answerOutcome: null,
     finalOutcome: 'error',
     totalCost: 0,
   };
@@ -216,6 +226,7 @@ export async function delegate(
 
     result.attempts.push(record);
     result.finalOutcome = record.outcome;
+    result.answerOutcome = record.outcome;
 
     if (!escalateTo) break;
     tier = escalateTo;
@@ -248,8 +259,13 @@ async function runCheck(
 ): Promise<{ verdict: Verdict; by: string; cost: number } | null> {
   let checker: Resolution;
   try {
+    // Pins are ignored here: a tier pinned by env or flag names the model
+    // doing the work, and resolving the checker through the same pin returned
+    // that very model, so every pinned run went silently unverified.
     checker = resolveTier(attempted.tier, configs, {
       exclude: [`${attempted.vendor}:${attempted.model}`],
+      ignorePins: true,
+      avoidVendor: attempted.vendor,
     });
   } catch {
     return null; // no independent checker available at this tier
@@ -257,17 +273,23 @@ async function runCheck(
   if (checker.vendor === attempted.vendor && checker.model === attempted.model) return null;
 
   try {
-    const verdict = await callOnce(
+    const collected = await callOnce(
       checker.config,
       VERIFY_SYSTEM,
       buildVerifyPrompt(task, answer),
       Math.min(maxTokens, 200),
       ctx,
     );
+    const verdict = parseVerdict(collected.text);
+    // A sibling from the same vendor is a weaker check than the cross-vendor
+    // one the design calls for. Use it when it is all there is, and say so.
+    if (checker.vendor === attempted.vendor) {
+      verdict.why += ' (same-vendor checker: no other vendor is credentialed at this tier)';
+    }
     return {
-      verdict: parseVerdict(verdict.text),
+      verdict,
       by: `${checker.vendor}:${checker.model}`,
-      cost: verdict.cost,
+      cost: collected.cost,
     };
   } catch {
     return null;

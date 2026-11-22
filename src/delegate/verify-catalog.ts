@@ -84,7 +84,7 @@ async function listVendorModels(config: ProviderConfig, signal: AbortSignal): Pr
     target.searchParams.set('limit', '100');
     if (next) target.searchParams.set('after_id', next);
 
-    const res = await fetch(target.toString(), { headers, signal });
+    const res = await fetch(target.toString(), { headers, signal, redirect: 'error' });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText || 'error'} from ${url}`);
 
     const body: any = await res.json();

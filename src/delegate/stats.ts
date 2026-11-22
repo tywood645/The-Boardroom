@@ -36,11 +36,45 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+/**
+ * Which judged attempts count as evidence about their tier.
+ *
+ * A confirmation always counts. A refutation at tier T counts only if the
+ * same run later had an answer confirmed at a tier above T: that is evidence
+ * T was not capable enough. A run in which nothing was ever confirmed says
+ * the task could not be satisfied (or the checker would not be), not that a
+ * tier is weak, so it is ignored.
+ *
+ * Without this, anyone who could submit tasks could write five unsatisfiable
+ * ones, have each refuted at every tier, and move a class to the frontier tier
+ * for everyone for the 90-day window. Frontier answers are never verified, so
+ * nothing could ever move it back.
+ */
+export function evidence(records: DelegationRecord[]): DelegationRecord[] {
+  const byRun = new Map<string, DelegationRecord[]>();
+  for (const r of records) {
+    const list = byRun.get(r.runId);
+    if (list) list.push(r);
+    else byRun.set(r.runId, [r]);
+  }
+
+  const out: DelegationRecord[] = [];
+  for (const run of byRun.values()) {
+    const confirmedAt = run
+      .filter(r => r.outcome === 'confirmed')
+      .map(r => TIERS.indexOf(r.tier));
+    const highestConfirmed = confirmedAt.length > 0 ? Math.max(...confirmedAt) : -1;
+    for (const r of run) {
+      if (r.outcome === 'confirmed') out.push(r);
+      else if (r.outcome === 'refuted' && TIERS.indexOf(r.tier) < highestConfirmed) out.push(r);
+    }
+  }
+  return out;
+}
+
 export function loadStats(records: DelegationRecord[] = readDelegations(WINDOW_MS)): Map<CellKey, CellStat> {
   const buckets = new Map<CellKey, DelegationRecord[]>();
-  for (const r of records) {
-    // Only attempts that were actually judged tell us anything about quality.
-    if (r.outcome !== 'confirmed' && r.outcome !== 'refuted') continue;
+  for (const r of evidence(records)) {
     const key: CellKey = `${r.cls}:${r.tier}`;
     const list = buckets.get(key);
     if (list) list.push(r);

@@ -1,3 +1,5 @@
+import { parseChoice, parseLine } from '../util/fields.js';
+
 /**
  * The refutation contract.
  *
@@ -45,6 +47,8 @@ export interface Verdict {
 }
 
 const EMPTY_DEFECT = /^(none|n\/a|na|-|nothing|no defects?)\.?$/i;
+/** The prompt's own placeholder echoed back: "<one sentence naming ...>". Not a defect. */
+const PLACEHOLDER_DEFECT = /^<[^>]*>$/;
 
 /**
  * Parsed in the same strict style as the motion protocol's parseSecond /
@@ -59,19 +63,20 @@ const EMPTY_DEFECT = /^(none|n\/a|na|-|nothing|no defects?)\.?$/i;
  */
 export function parseVerdict(text: string): Verdict {
   const cleaned = text.trim();
-  const verdictMatch = cleaned.match(/VERDICT:\s*(CONFIRMED|REFUTED)/i);
-  if (!verdictMatch) {
-    return { kind: 'unparseable', defect: '', why: 'no VERDICT line found' };
+  // Line-leading, unambiguous and not the format echoed back (util/fields.ts).
+  // A checker that restated "VERDICT: CONFIRMED ... OR: VERDICT: REFUTED"
+  // before answering used to be read as CONFIRMED, because it came first.
+  const kind = parseChoice(cleaned, 'VERDICT', ['CONFIRMED', 'REFUTED']);
+  if (!kind) {
+    return { kind: 'unparseable', defect: '', why: 'no single, unambiguous VERDICT line found' };
   }
 
-  const kind = verdictMatch[1].toUpperCase();
   if (kind === 'CONFIRMED') {
     return { kind: 'confirmed', defect: '', why: 'checker confirmed the answer' };
   }
 
-  const defectMatch = cleaned.match(/DEFECT:\s*([\s\S]+?)(?:\n\s*\n|$)/i);
-  const defect = defectMatch ? defectMatch[1].trim() : '';
-  if (!defect || EMPTY_DEFECT.test(defect)) {
+  const defect = parseLine(cleaned, 'DEFECT', 200) ?? '';
+  if (!defect || EMPTY_DEFECT.test(defect) || PLACEHOLDER_DEFECT.test(defect)) {
     return {
       kind: 'confirmed',
       defect: '',

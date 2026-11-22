@@ -47,8 +47,38 @@ export class Deadline {
     return this.controller.signal.aborted;
   }
 
+  /** Abort every call in the run now, for a reason other than the clock. */
+  cancel(reason: string): void {
+    clearTimeout(this.timer);
+    if (!this.controller.signal.aborted) this.controller.abort(new DeadlineError(reason, 0));
+  }
+
   dispose(): void {
     clearTimeout(this.timer);
+  }
+}
+
+/**
+ * On Ctrl-C or SIGTERM, abort the run's in-flight calls before exiting.
+ *
+ * Node's default is to die at once, which leaves every in-flight call's hold
+ * open in the ledger at its worst case. Aborting first sends each call down
+ * its normal failure path, which settles the hold at what the call plausibly
+ * cost; the ledger writes are synchronous, so a short grace is enough. A
+ * second signal gets the default behaviour and exits immediately.
+ */
+export function exitCleanlyOnSignal(deadline: Deadline, graceMs = 250): void {
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+    process.once(signal, () => {
+      deadline.cancel(`interrupted by ${signal}`);
+      // With every call aborted the command reaches its own process.exit(0)
+      // within a few ticks, usually before the grace timer. However it exits,
+      // an interrupted run must not report success.
+      process.once('exit', () => {
+        process.exitCode = code;
+      });
+      setTimeout(() => process.exit(code), graceMs);
+    });
   }
 }
 

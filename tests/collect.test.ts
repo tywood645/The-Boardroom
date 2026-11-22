@@ -258,12 +258,12 @@ describe('collectStream deadline and concurrency', () => {
   });
 });
 
-describe('CostTracker write batching', () => {
+describe('CostTracker ledger writes', () => {
   let tmpDir: string;
   let origHome: string | undefined;
 
   before(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'boardroom-flush-test-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'boardroom-ledger-test-'));
     origHome = process.env.HOME;
     process.env.HOME = tmpDir;
   });
@@ -273,23 +273,23 @@ describe('CostTracker write batching', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  // usage.json used to be fully read, parsed, filtered and rewritten on every
-  // single recordUsage call, with checkBudget reading it twice more on top.
-  it('writes nothing until flush, then writes every entry once', () => {
-    const usagePath = join(tmpDir, '.boardroom', 'usage.json');
+  // usage.json used to be buffered in memory and written once at exit, so a
+  // Ctrl-C or crash lost the whole run, and the final whole-file rewrite
+  // erased whatever any concurrent process had written in the meantime.
+  it('appends one line per call immediately, with no flush step', () => {
     const tracker = new CostTracker();
-
     for (let i = 0; i < 20; i++) tracker.recordUsage('gpt-5.6-terra', 100, 50);
-    assert.equal(existsSync(usagePath), false, 'recordUsage must not touch disk');
-
-    tracker.flush();
-    const parsed = JSON.parse(readFileSync(usagePath, 'utf-8'));
-    assert.equal(parsed.entries.length, 20);
+    const month = new Date().toISOString().slice(0, 7);
+    const path = join(tmpDir, '.boardroom', 'usage', `${month}.jsonl`);
+    assert.ok(existsSync(path));
+    const lines = readFileSync(path, 'utf-8').trim().split('\n');
+    assert.equal(lines.length, 20);
+    assert.equal(JSON.parse(lines[0]).t, 'use');
   });
 
-  it('counts pending entries in daily spend before they are flushed', () => {
+  it('counts its own spend in daily totals', () => {
     const tracker = new CostTracker();
     tracker.recordUsage('gpt-5.6-terra', 1000, 1000);
-    assert.ok(tracker.getDailySpend() > 0, 'caps must see spend that is not yet on disk');
+    assert.ok(tracker.getDailySpend() > 0);
   });
 });
