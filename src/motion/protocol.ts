@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { ProviderConfig } from '../provider/factory.js';
-import { createProvider } from '../provider/factory.js';
-import { collectStream } from '../provider/collect.js';
+import { collectStructured, parseStructured, jsonInstruction, type Shape } from '../provider/structured.js';
 import type { RunContext } from '../provider/collect.js';
 import { roleForVendor } from '../boardroom/roles.js';
 import { consultBriefing, briefingBlock } from '../boardroom/consultant.js';
@@ -146,13 +145,17 @@ async function runSecondPhase(
     (recall || '') +
     briefingBlock +
     `MOTION BEFORE THE BOARD:\n"${motion}"\n\n` +
-    `This is the SECOND phase. You are NOT voting on the merits of the motion, you are voting only on whether this motion is worth the board's time to debate. Even if you personally disagree with the motion, you should second it if it raises a real question worth resolving.\n\n` +
-    `Reply in this EXACT format (no markdown, no preamble):\n` +
-    `SECOND: yes\n` +
-    `REASON: <one sentence>\n\n` +
-    `OR:\n` +
-    `SECOND: no\n` +
-    `REASON: <one sentence>`;
+    `This is the SECOND phase. You are NOT voting on the merits of the motion, you are voting only on whether this motion is worth the board's time to debate. Even if you personally disagree with the motion, you should second it if it raises a real question worth resolving.\n\n`;
+  const prompt = (structured: boolean) =>
+    userPrompt +
+    (structured
+      ? jsonInstruction(SECOND_SHAPE, 'one sentence')
+      : `Reply in this EXACT format (no markdown, no preamble):\n` +
+        `SECOND: yes\n` +
+        `REASON: <one sentence>\n\n` +
+        `OR:\n` +
+        `SECOND: no\n` +
+        `REASON: <one sentence>`);
 
   const results = await Promise.all(
     configs.map(async (cfg): Promise<SecondVote> => {
@@ -162,7 +165,7 @@ async function runSecondPhase(
       }
       const system = systemFor(role.name, role.mindset);
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
+        const result = await callAndCollect(cfg, system, prompt, maxTokens, SECOND_SHAPE, ctx);
         const parsed = parseSecond(result.text);
         return {
           panelist: cfg.name,
@@ -195,8 +198,26 @@ function parseReason(cleaned: string): string {
 // field must start a line, must not be the format line echoed back, and must
 // not contradict itself. Anything else falls to the safe default.
 
+//
+// Each first tries the reply as the phase's JSON object (provider/structured.ts),
+// which is what a vendor asked for structured output returns. The same bounds
+// apply to text from either form.
+
+export const SECOND_SHAPE: Shape = { name: 'second_motion', choiceKey: 'second', choices: ['yes', 'no'], textKey: 'reason' };
+export const DEBATE_SHAPE: Shape = {
+  name: 'debate_stance', choiceKey: 'stance', choices: ['SUPPORT', 'OPPOSE', 'UNDECIDED'], textKey: 'case',
+};
+export const VOTE_SHAPE: Shape = { name: 'cast_vote', choiceKey: 'vote', choices: ['AYE', 'NAY', 'ABSTAIN'], textKey: 'reason' };
+
+/** A reason from a JSON reply: one line, bounded, like one read from a REASON line. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_CHARS);
+}
+
 export function parseSecond(text: string): { seconded: boolean; reason: string } {
   const cleaned = text.trim();
+  const json = parseStructured(cleaned, SECOND_SHAPE);
+  if (json) return { seconded: json.choice === 'yes', reason: oneLine(json.text) };
   return { seconded: parseChoice(cleaned, 'SECOND', ['yes', 'no']) === 'yes', reason: parseReason(cleaned) };
 }
 
@@ -238,10 +259,14 @@ async function runDebatePhase(
     briefingBlock +
     `MOTION BEFORE THE BOARD:\n"${motion}"\n\n` +
     `The motion was seconded by: ${secondedBy || '(none)'}\n\n` +
-    `This is the DEBATE phase. Take a CLEAR stance on the motion and argue your case from your role's perspective. No hedging. No "on one hand / on the other hand." Pick a side or explicitly state UNDECIDED.\n\n` +
-    `Reply in this EXACT format (no markdown, no preamble):\n` +
-    `STANCE: SUPPORT | OPPOSE | UNDECIDED\n` +
-    `CASE: <2-4 sentences arguing your position. Hard limit 150 words.>`;
+    `This is the DEBATE phase. Take a CLEAR stance on the motion and argue your case from your role's perspective. No hedging. No "on one hand / on the other hand." Pick a side or explicitly state UNDECIDED.\n\n`;
+  const prompt = (structured: boolean) =>
+    userPrompt +
+    (structured
+      ? jsonInstruction(DEBATE_SHAPE, '2-4 sentences arguing your position. Hard limit 150 words.')
+      : `Reply in this EXACT format (no markdown, no preamble):\n` +
+        `STANCE: SUPPORT | OPPOSE | UNDECIDED\n` +
+        `CASE: <2-4 sentences arguing your position. Hard limit 150 words.>`);
 
   return Promise.all(
     configs.map(async (cfg): Promise<DebateSpeech> => {
@@ -249,7 +274,7 @@ async function runDebatePhase(
       if (!role) return makeErrorDebate(cfg, 'no role assigned');
       const system = systemFor(role.name, role.mindset);
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
+        const result = await callAndCollect(cfg, system, prompt, maxTokens, DEBATE_SHAPE, ctx);
         const parsed = parseDebate(result.text);
         return {
           panelist: cfg.name,
@@ -274,6 +299,8 @@ const MAX_CASE_CHARS = 2000;
 
 export function parseDebate(text: string): { stance: Stance; case: string } {
   const cleaned = text.trim();
+  const json = parseStructured(cleaned, DEBATE_SHAPE);
+  if (json) return { stance: json.choice as Stance, case: json.text.trim().slice(0, MAX_CASE_CHARS) };
   const stance: Stance = parseChoice(cleaned, 'STANCE', ['SUPPORT', 'OPPOSE', 'UNDECIDED']) ?? 'UNDECIDED';
   // Everything after the last line-leading "CASE:"; the last, so an echoed
   // format line is not taken for the argument.
@@ -333,13 +360,17 @@ async function runVotePhase(
         briefingBlock +
         `MOTION BEFORE THE BOARD:\n"${motion}"\n\n` +
         `DEBATE TRANSCRIPT (all advisors, including your own ${myStance} stance):\n${QUOTED_NOTE}\n\n${debateBlock}\n\n` +
-        `This is the FINAL VOTE. Cast your ballot AS THE ${role.name}. You may flip your stance from the debate if other advisors' arguments have persuaded you, that is the entire point of debate. If you flip, say so explicitly.\n\n` +
-        `Reply in this EXACT format (no markdown, no preamble):\n` +
-        `VOTE: AYE | NAY | ABSTAIN\n` +
-        `REASON: <one sentence in your role's voice>`;
+        `This is the FINAL VOTE. Cast your ballot AS THE ${role.name}. You may flip your stance from the debate if other advisors' arguments have persuaded you, that is the entire point of debate. If you flip, say so explicitly.\n\n`;
+      const prompt = (structured: boolean) =>
+        userPrompt +
+        (structured
+          ? jsonInstruction(VOTE_SHAPE, "one sentence in your role's voice")
+          : `Reply in this EXACT format (no markdown, no preamble):\n` +
+            `VOTE: AYE | NAY | ABSTAIN\n` +
+            `REASON: <one sentence in your role's voice>`);
 
       try {
-        const result = await callAndCollect(cfg, system, userPrompt, maxTokens, ctx);
+        const result = await callAndCollect(cfg, system, prompt, maxTokens, VOTE_SHAPE, ctx);
         const parsed = parseVote(result.text);
         const flipped = stanceVsVote(myStance, parsed.vote);
         return {
@@ -363,6 +394,8 @@ async function runVotePhase(
 
 export function parseVote(text: string): { vote: Vote; reason: string } {
   const cleaned = text.trim();
+  const json = parseStructured(cleaned, VOTE_SHAPE);
+  if (json) return { vote: json.choice as Vote, reason: oneLine(json.text) };
   const vote: Vote = parseChoice(cleaned, 'VOTE', ['AYE', 'NAY', 'ABSTAIN']) ?? 'ABSTAIN';
   return { vote, reason: parseReason(cleaned) };
 }
@@ -395,22 +428,18 @@ function makeErrorVote(cfg: ProviderConfig, error: string, stance: Stance): Fina
 // Provider call helper
 // ---------------------------------------------------------------------------
 
+/**
+ * One phase call. The reply is asked for as a JSON object where the vendor
+ * supports that, and in the line format otherwise (provider/structured.ts
+ * decides, and falls back by itself if a vendor refuses).
+ */
 async function callAndCollect(
   cfg: ProviderConfig,
   system: string,
-  userPrompt: string,
+  prompt: (structured: boolean) => string,
   maxTokens: number,
+  shape: Shape,
   ctx?: RunContext,
 ) {
-  return collectStream(
-    createProvider(cfg),
-    {
-      system,
-      messages: [{ role: 'user', content: userPrompt }],
-      tools: [],
-      maxTokens,
-      model: cfg.model,
-    },
-    ctx,
-  );
+  return collectStructured(cfg, { system, prompt, maxTokens, shape }, ctx);
 }

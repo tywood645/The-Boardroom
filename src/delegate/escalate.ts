@@ -4,12 +4,13 @@ import { createProvider } from '../provider/factory.js';
 import { collectStream, type RunContext, type Collected } from '../provider/collect.js';
 import type { Tier } from '../cost/catalog.js';
 import { TIERS } from '../cost/catalog.js';
-import { BudgetError, DeadlineError } from '../util/error.js';
+import { BoardRoomError, BudgetError, DeadlineError } from '../util/error.js';
 import { resolveTier, nextTier, hasNoTiers, type Resolution } from './tiers.js';
 import { classify, type TaskClass } from './classify.js';
 import { loadStats, pickStartTier } from './stats.js';
 import { appendDelegation, type Outcome } from './ledger.js';
-import { VERIFY_SYSTEM, buildVerifyPrompt, parseVerdict, type Verdict } from './verify.js';
+import { verifySystem, VERDICT_SHAPE, buildVerifyPrompt, parseVerdict, type Verdict } from './verify.js';
+import { collectStructured } from '../provider/structured.js';
 
 /**
  * Cheap-first escalation.
@@ -40,6 +41,26 @@ export interface DelegateOptions {
   verify?: boolean;
   /** Injected in tests so a run can be driven without touching ~/.boardroom. */
   stats?: ReturnType<typeof loadStats>;
+  /** Share of top-tier answers to check, 0 to 1. Defaults to BOARDROOM_VERIFY_FRONTIER, else 0.2. */
+  frontierSampleRate?: number;
+  /** Source of randomness for that sampling. Injected in tests. */
+  random?: () => number;
+}
+
+/** Share of top-tier answers checked when nothing says otherwise. */
+export const DEFAULT_FRONTIER_SAMPLE_RATE = 0.2;
+
+/** BOARDROOM_VERIFY_FRONTIER as a share between 0 and 1. A value that is not one is an error. */
+export function frontierSampleRate(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_FRONTIER_SAMPLE_RATE;
+  const n = /^\d+(\.\d+)?$/.test(raw.trim()) ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n > 1) {
+    throw new BoardRoomError(
+      `BOARDROOM_VERIFY_FRONTIER must be a share between 0 and 1 (0 turns it off), got "${raw}"`,
+      'INVALID_ARGUMENT',
+    );
+  }
+  return n;
 }
 
 export interface Attempt {
@@ -109,6 +130,8 @@ export async function delegate(
 ): Promise<DelegateResult> {
   const maxTokens = opts.maxTokens ?? 1024;
   const verifyEnabled = opts.verify !== false && !opts.pin;
+  const frontierRate = opts.frontierSampleRate ?? frontierSampleRate(process.env.BOARDROOM_VERIFY_FRONTIER);
+  const random = opts.random ?? Math.random;
 
   const { cls, why: classifiedWhy } = classify(task, opts.taskClass);
   const stats = opts.stats ?? loadStats();
@@ -197,12 +220,20 @@ export async function delegate(
     const atTop = nextTier(resolved.tier) === null;
     const canEscalate = !flat && escalations < MAX_ESCALATIONS && !atTop;
 
+    // The top tier is normally not checked, but then the stats never learn
+    // whether reaching it helped: a refutation one tier down only counts as
+    // evidence once a higher tier is confirmed (see stats.ts), and the top
+    // tier never was. So a fraction of top-tier answers is checked anyway, by
+    // another top-tier model. The verdict cannot escalate anything.
+    const sampleTop = verifyEnabled && !flat && atTop && random() < frontierRate;
+
     // On a local backend a check is free and is the only quality signal there
     // is, so it runs even though a refutation cannot escalate: the answer is
     // then returned marked as refuted.
-    if (verifyEnabled && (canEscalate || flat)) {
-      const check = await runCheck(task, answer.text, resolved, configs, ctx, maxTokens);
+    if (verifyEnabled && (canEscalate || flat || sampleTop)) {
+      const check = await runCheck(task, answer.text, resolved, configs, ctx, maxTokens, sampleTop);
       if (check) {
+        if (sampleTop) check.verdict.why += ' (sampled check of a top-tier answer)';
         record.verdict = check.verdict;
         record.verdictBy = check.by;
         record.cost += check.cost;
@@ -264,6 +295,7 @@ async function runCheck(
   configs: ProviderConfig[],
   ctx: RunContext,
   maxTokens: number,
+  sameTierOnly = false,
 ): Promise<{ verdict: Verdict; by: string; cost: number } | null> {
   let checker: Resolution;
   try {
@@ -279,13 +311,19 @@ async function runCheck(
     return null; // no independent checker available at this tier
   }
   if (checker.vendor === attempted.vendor && checker.model === attempted.model) return null;
+  // A weaker model's verdict on a top-tier answer would be recorded as
+  // evidence about the top tier. Only a peer may judge it.
+  if (sameTierOnly && checker.downgradedFrom) return null;
 
   try {
-    const collected = await callOnce(
+    const collected = await collectStructured(
       checker.config,
-      VERIFY_SYSTEM,
-      buildVerifyPrompt(task, answer),
-      Math.min(maxTokens, 200),
+      {
+        system: verifySystem,
+        prompt: () => buildVerifyPrompt(task, answer),
+        maxTokens: Math.min(maxTokens, 200),
+        shape: VERDICT_SHAPE,
+      },
       ctx,
     );
     const verdict = parseVerdict(collected.text);

@@ -10,7 +10,9 @@
 
 - `delegate` works on the OpenRouter and Ollama backends. On OpenRouter, models are sent under their OpenRouter IDs; `BOARDROOM_OPENROUTER_IDS` corrects any that differ from the `<vendor>/<catalog id>` convention. On Ollama, every tier resolves to the configured local model, a second local model checks the answer, and nothing escalates.
 - `delegate --verify-catalog` on OpenRouter checks those IDs against OpenRouter's live list, with one request. On Ollama it reports that the catalog does not apply, where it used to fail.
+- Structured replies: with per-vendor keys, seconds, stances, votes and verdicts are requested as JSON objects (forced tool call on Anthropic, JSON Schema on OpenAI, xAI, Google and Perplexity, JSON mode on DeepSeek) and validated against the allowed values, falling back to the line parser. A vendor that rejects a structured request is retried once in the line format and not asked again that run. `BOARDROOM_STRUCTURED=off` disables it. Vendor support is taken from public documentation and has not been tested against the live APIs.
 - `--json` for `ask` and `motion`: the full result on stdout, progress on stderr.
+- `delegate` checks one top-tier answer in five with another top-tier model, so the routing stats can learn whether escalating to the top tier helps. `BOARDROOM_VERIFY_FRONTIER` sets the share; `0` turns it off. This adds an occasional top-tier call, and a refuted sample exits `2`.
 
 ### Fixed
 

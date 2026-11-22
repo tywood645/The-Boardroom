@@ -83,6 +83,8 @@ export function estimateTokens(params: MessageCreateParams): number {
     n += typeof m.content === 'string' ? upperBoundTokens(m.content) : upperBoundTokens(JSON.stringify(m.content));
   }
   if (params.tools.length > 0) n += upperBoundTokens(JSON.stringify(params.tools));
+  // A response schema is sent with the request and billed as input too.
+  if (params.responseFormat) n += upperBoundTokens(JSON.stringify(params.responseFormat)) + 4 * PER_MESSAGE_OVERHEAD;
   return n;
 }
 
@@ -177,6 +179,7 @@ async function dispatch(
   // No tokenizer averages anywhere near this many bytes per token, so text
   // past this was not produced within max_tokens: the vendor is ignoring it.
   const maxTextBytes = params.maxTokens * MAX_BYTES_PER_TOKEN + 4096;
+  const toolReply = params.responseFormat?.mode === 'tool';
 
   /** What this call is charged: authoritative counts where valid, upper bounds where not. */
   const tally = () => {
@@ -209,11 +212,19 @@ async function dispatch(
           if (validTokenCount(n) && n > 0) reportedIn = n;
           break;
         }
-        case 'content_block_delta':
-          if (ev.delta.type === 'text_delta') {
+        case 'content_block_delta': {
+          // With a forced tool call the reply is the tool's arguments, which
+          // arrive as JSON fragments. They are the answer text in that case.
+          const raw =
+            ev.delta.type === 'text_delta'
+              ? ev.delta.text
+              : toolReply && ev.delta.type === 'input_json_delta'
+                ? ev.delta.partial_json
+                : undefined;
+          if (raw !== undefined) {
             if (ttfbMs === 0) ttfbMs = Date.now() - start;
             sawContent = true;
-            const piece = typeof ev.delta.text === 'string' ? ev.delta.text : String(ev.delta.text ?? '');
+            const piece = typeof raw === 'string' ? raw : String(raw ?? '');
             text += piece;
             textBytes += Buffer.byteLength(piece, 'utf-8');
             if (textBytes > maxTextBytes) {
@@ -227,6 +238,7 @@ async function dispatch(
             }
           }
           break;
+        }
         case 'message_delta': {
           const out = ev.usage?.output_tokens;
           if (validTokenCount(out)) reportedOut = out;

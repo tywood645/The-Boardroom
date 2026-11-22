@@ -3,13 +3,25 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { installMockFetch, restoreFetch, onFetch, openaiSSE, countingHandler } from './helpers/mock-fetch.ts';
-import { delegate, MAX_ESCALATIONS } from '../src/delegate/escalate.ts';
+import { installMockFetch, restoreFetch, onFetch, openaiSSE, anthropicSSE, countingHandler } from './helpers/mock-fetch.ts';
+import { delegate, MAX_ESCALATIONS, frontierSampleRate, DEFAULT_FRONTIER_SAMPLE_RATE } from '../src/delegate/escalate.ts';
 import { classify, TIER_PRIORS } from '../src/delegate/classify.ts';
 import { parseVerdict } from '../src/delegate/verify.ts';
 import { appendDelegation, readDelegations, type DelegationRecord } from '../src/delegate/ledger.ts';
 import { loadStats, pickStartTier, MIN_SAMPLES } from '../src/delegate/stats.ts';
 import type { ProviderConfig } from '../src/provider/factory.ts';
+
+// Top-tier answers are sample-checked at random by default. Every test here
+// that reaches the top tier counts calls or outcomes, so sampling is off
+// unless a test turns it on through its own options.
+const savedSampleRate = process.env.BOARDROOM_VERIFY_FRONTIER;
+before(() => {
+  process.env.BOARDROOM_VERIFY_FRONTIER = '0';
+});
+after(() => {
+  if (savedSampleRate === undefined) delete process.env.BOARDROOM_VERIFY_FRONTIER;
+  else process.env.BOARDROOM_VERIFY_FRONTIER = savedSampleRate;
+});
 
 // Three vendors so every tier has a distinct model and a distinct checker.
 const CONFIGS: ProviderConfig[] = [
@@ -310,5 +322,116 @@ describe('delegation ledger and measured tiers', () => {
   it('ignores unverified attempts, which say nothing about quality', () => {
     const stats = loadStats(Array.from({ length: 20 }, () => rec({ outcome: 'unverified' })));
     assert.equal(stats.size, 0);
+  });
+});
+
+describe('sample-checking the top tier', () => {
+  let tmpDir: string;
+  let origHome: string | undefined;
+
+  before(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'boardroom-sample-test-'));
+    origHome = process.env.HOME;
+  });
+  after(() => {
+    process.env.HOME = origHome;
+    rmSync(tmpDir, { recursive: true, force: true });
+    restoreFetch();
+  });
+  beforeEach(() => {
+    process.env.HOME = mkdtempSync(join(tmpDir, 'h-'));
+    restoreFetch();
+    installMockFetch();
+  });
+
+  const always = () => 0; // below any positive rate: always sampled
+  const never = () => 0.99;
+
+  /** The Anthropic seat answers; every other seat is the checker. */
+  function board(verdict: string) {
+    return countingHandler((url: string, init?: RequestInit) => {
+      if (url.includes('anthropic.com')) return anthropicSSE('top-tier answer');
+      return openaiSSE(isCheck(String(init?.body ?? '')) ? verdict : 'answer');
+    });
+  }
+  // An explicit rate: the file-wide setting above turns sampling off.
+  const top = { taskClass: 'draft' as const, minTier: 'frontier' as const, stats: new Map(), frontierSampleRate: 0.2 };
+
+  it('checks a sampled top-tier answer with another top-tier model', async () => {
+    const handler = board(CONFIRMED);
+    onFetch(handler);
+    const d = await delegate('write a note', CONFIGS, {}, { ...top, random: always });
+    assert.equal(handler.calls, 2);
+    assert.equal(d.attempts.length, 1);
+    assert.equal(d.attempts[0].model, 'claude-opus-5');
+    assert.equal(d.attempts[0].verdictBy, 'openai:gpt-5.6-sol');
+    assert.equal(d.finalOutcome, 'confirmed');
+    assert.match(d.attempts[0].verdict!.why, /sampled check of a top-tier answer/);
+    const [record] = readDelegations();
+    assert.equal(record.tier, 'frontier');
+    assert.equal(record.outcome, 'confirmed');
+  });
+
+  it('leaves the answer unchecked when it is not sampled', async () => {
+    const handler = board(CONFIRMED);
+    onFetch(handler);
+    const d = await delegate('write a note', CONFIGS, {}, { ...top, random: never });
+    assert.equal(handler.calls, 1);
+    assert.equal(d.finalOutcome, 'unverified');
+  });
+
+  it('marks a refuted sample as refuted and does not try again', async () => {
+    const handler = board(REFUTED);
+    onFetch(handler);
+    const d = await delegate('write a note', CONFIGS, {}, { ...top, random: always });
+    assert.equal(handler.calls, 2);
+    assert.equal(d.attempts.length, 1, 'there is nowhere above the top tier to go');
+    assert.equal(d.answerOutcome, 'refuted');
+  });
+
+  it('never samples when verification is off, or the rate is 0', async () => {
+    const handler = board(CONFIRMED);
+    onFetch(handler);
+    await delegate('write a note', CONFIGS, {}, { ...top, random: always, verify: false });
+    await delegate('write a note', CONFIGS, {}, { ...top, random: always, frontierSampleRate: 0 });
+    assert.equal(handler.calls, 2, 'one call per run');
+  });
+
+  it('skips the sample when only a lower-tier model could check it', async () => {
+    // One vendor with a top-tier model: a mid-tier checker must not judge it.
+    const oneTop = CONFIGS.filter(c => c.name !== 'anthropic');
+    const handler = board(CONFIRMED);
+    onFetch(handler);
+    const d = await delegate('write a note', oneTop, {}, { ...top, random: always });
+    assert.equal(d.attempts[0].model, 'gpt-5.6-sol');
+    assert.equal(handler.calls, 1);
+    assert.equal(d.finalOutcome, 'unverified');
+  });
+
+  it('reads the rate from BOARDROOM_VERIFY_FRONTIER and rejects a bad one', () => {
+    assert.equal(frontierSampleRate(undefined), DEFAULT_FRONTIER_SAMPLE_RATE);
+    assert.equal(frontierSampleRate(''), DEFAULT_FRONTIER_SAMPLE_RATE);
+    assert.equal(frontierSampleRate('0'), 0);
+    assert.equal(frontierSampleRate('0.35'), 0.35);
+    assert.equal(frontierSampleRate('1'), 1);
+    for (const bad of ['abc', '2', '-0.1', '20%']) {
+      assert.throws(() => frontierSampleRate(bad), /BOARDROOM_VERIFY_FRONTIER/, bad);
+    }
+  });
+
+  // The point of sampling: the stats can now learn that the top tier helps.
+  it('lets confirmed top-tier samples promote a class past a failing mid tier', () => {
+    const base = {
+      v: 1 as const, ts: new Date().toISOString(), attempt: 0, cls: 'reason' as const,
+      vendor: 'v', model: 'm', inputTokens: 1, outputTokens: 1, cost: 0, latencyMs: 1, ttfbMs: 1,
+    };
+    const runs = Array.from({ length: 6 }, (_, i) => [
+      { ...base, runId: `r-${i}`, tier: 'mid' as const, outcome: 'refuted' as const },
+      { ...base, runId: `r-${i}`, tier: 'frontier' as const, outcome: 'confirmed' as const },
+    ]).flat();
+    assert.equal(pickStartTier('reason', loadStats(runs)).tier, 'frontier');
+    // Without the top-tier confirmations the same refutations prove nothing.
+    const unsampled = runs.map(r => (r.tier === 'frontier' ? { ...r, outcome: 'unverified' as const } : r));
+    assert.equal(pickStartTier('reason', loadStats(unsampled)).tier, 'mid');
   });
 });

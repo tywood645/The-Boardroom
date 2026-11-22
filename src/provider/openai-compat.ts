@@ -89,6 +89,15 @@ export class OpenAICompatProvider extends LLMProvider {
       stream_options: { include_usage: true },
     };
     if (tools.length > 0) body.tools = tools;
+    // Structured output arrives as ordinary content text. A vendor that does
+    // not accept the field answers 4xx; the caller then retries without it.
+    if (params.responseFormat) {
+      const { mode, name, schema, strict } = params.responseFormat;
+      body.response_format =
+        mode === 'json_object'
+          ? { type: 'json_object' }
+          : { type: 'json_schema', json_schema: { name, schema, ...(strict ? { strict: true } : {}) } };
+    }
 
     let lastError: Error | null = null;
     // Retrying is only safe before the first content delta reaches the consumer.
