@@ -226,7 +226,7 @@ It asks every credentialed vendor which models it actually serves and exits non-
 
 - A `REFUTED` that names no defect is treated as `CONFIRMED`. Otherwise a model that reflexively refuses to approve anything drives the ladder to the most expensive tier for free.
 - An unparseable verdict does not escalate. Failing open on escalation while failing closed on budget is the right asymmetry: a parser miss must never be able to spend frontier money.
-- The top tier is never verified. A refutation there would have nowhere to go, and it is the single most expensive call the delegator can make.
+- The top tier is not verified by default, since a refutation there has nowhere to go and it is the most expensive call the delegator can make. One answer in five is checked anyway, by another top-tier model, so the measured stats can learn whether reaching the top tier actually helps. That verdict never escalates anything; a refuted sample is returned marked as refuted. Set the share with `BOARDROOM_VERIFY_FRONTIER` (`0` turns it off).
 
 The checker is chosen from the catalog, ignoring `--model` and `BOARDROOM_TIER_*` pins (a pin names the worker, and the checker must be a different model), and from a different vendor wherever one is credentialed at that tier; a same-vendor sibling is used only when it is all there is, and the verdict says so. Verdicts and votes are read strictly: the field must be a line of its own, an echoed format line (`VERDICT: CONFIRMED | REFUTED`) is not an answer, and a reply that contradicts itself counts as no answer.
 
