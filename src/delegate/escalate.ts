@@ -5,7 +5,7 @@ import { collectStream, type RunContext, type Collected } from '../provider/coll
 import type { Tier } from '../cost/catalog.js';
 import { TIERS } from '../cost/catalog.js';
 import { BudgetError, DeadlineError } from '../util/error.js';
-import { resolveTier, nextTier, type Resolution } from './tiers.js';
+import { resolveTier, nextTier, hasNoTiers, type Resolution } from './tiers.js';
 import { classify, type TaskClass } from './classify.js';
 import { loadStats, pickStartTier } from './stats.js';
 import { appendDelegation, type Outcome } from './ledger.js';
@@ -114,8 +114,13 @@ export async function delegate(
   const stats = opts.stats ?? loadStats();
   const picked = pickStartTier(cls, stats);
   const startTier = atLeast(picked.tier, opts.minTier, TIERS);
-  const startWhy =
-    startTier === picked.tier ? picked.why : `${picked.why}; raised to ${startTier} by --min-tier`;
+  // A local backend is one flat pool of models: no tier to escalate to.
+  const flat = hasNoTiers(configs);
+  const startWhy = flat
+    ? 'local backend: one pool of models, so no tiers and no escalation'
+    : startTier === picked.tier
+      ? picked.why
+      : `${picked.why}; raised to ${startTier} by --min-tier`;
 
   // Stats group attempts by run, so ids from parallel processes must not collide.
   const runId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}-${cls}`;
@@ -190,9 +195,12 @@ export async function delegate(
     // a refutation would have nowhere to escalate to — and it is the single
     // most expensive call the delegator can make.
     const atTop = nextTier(resolved.tier) === null;
-    const canEscalate = escalations < MAX_ESCALATIONS && !atTop;
+    const canEscalate = !flat && escalations < MAX_ESCALATIONS && !atTop;
 
-    if (verifyEnabled && canEscalate) {
+    // On a local backend a check is free and is the only quality signal there
+    // is, so it runs even though a refutation cannot escalate: the answer is
+    // then returned marked as refuted.
+    if (verifyEnabled && (canEscalate || flat)) {
       const check = await runCheck(task, answer.text, resolved, configs, ctx, maxTokens);
       if (check) {
         record.verdict = check.verdict;
@@ -209,7 +217,7 @@ export async function delegate(
           ? 'confirmed'
           : 'unverified';
 
-    const escalateTo = record.outcome === 'refuted' ? nextTier(resolved.tier) : null;
+    const escalateTo = record.outcome === 'refuted' && canEscalate ? nextTier(resolved.tier) : null;
 
     appendDelegation({
       v: 1, ts: new Date().toISOString(), runId, attempt,

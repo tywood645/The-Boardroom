@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `boardroom` (ask) now exits `1` when no advisor answered. It used to exit `0` whatever happened. Scripts that ignored the exit code are unaffected; scripts that check it will now see failures.
+
+### Added
+
+- `delegate` works on the OpenRouter and Ollama backends. On OpenRouter, models are sent under their OpenRouter IDs; `BOARDROOM_OPENROUTER_IDS` corrects any that differ from the `<vendor>/<catalog id>` convention. On Ollama, every tier resolves to the configured local model, a second local model checks the answer, and nothing escalates.
+- `delegate --verify-catalog` on OpenRouter checks those IDs against OpenRouter's live list, with one request. On Ollama it reports that the catalog does not apply, where it used to fail.
+- `--json` for `ask` and `motion`: the full result on stdout, progress on stderr.
+
+### Fixed
+
+- `--rounds 2abc` is rejected; it used to be read as `2`.
+- `delegate --explain --json` no longer prints the budget line into the JSON output.
+
 ## 0.3.0 (2026-11-22)
 
 The first tagged release. It adds the `delegate` command and hardens budget enforcement, board deliberation and local state against the findings of three security reviews. Several defaults changed; read **Upgrading** before you update.

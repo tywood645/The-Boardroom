@@ -36,6 +36,24 @@ export function packageVersion(): string {
   }
 }
 
+/**
+ * Where progress lines go. With --json, stdout must hold the JSON document and
+ * nothing else, so everything a person would read moves to stderr.
+ */
+export function progressTo(json: boolean | undefined): (line: string) => void {
+  return json ? line => console.error(line) : line => console.log(line);
+}
+
+/**
+ * 0 when at least one advisor answered, 1 when none did.
+ *
+ * `ask` used to exit 0 whatever happened, so a run in which every advisor
+ * failed (bad keys, a spent budget, an outage) looked like success to a script.
+ */
+export function askExitCode(result: { round1: Array<{ error?: string; text: string }> }): 0 | 1 {
+  return result.round1.some(a => !a.error && a.text) ? 0 : 1;
+}
+
 export async function main(): Promise<void> {
   const program = new Command()
     .name('boardroom')
@@ -55,31 +73,34 @@ export async function main(): Promise<void> {
     .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
     .option('--concurrency <n>', 'Max provider calls in flight', String(DEFAULT_CONCURRENCY))
     .option('--deadline <ms>', 'Wall-clock budget for the whole run', String(DEFAULT_DEADLINE_MS))
+    .option('--json', 'Emit the full result as JSON on stdout; progress lines go to stderr')
     .action(async (questionParts: string[], cmdOpts: RunFlags & { rounds: string; maxTokens: string; consultant: boolean; recall: boolean }) => {
       const question = questionParts.join(' ');
+      const say = progressTo(cmdOpts.json);
       const maxTokens = positiveInt(cmdOpts.maxTokens, '--max-tokens');
-      const configs = ensureConfigs();
-      const { ctx, deadline } = makeContext(cmdOpts);
-      console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
-      const rounds = parseInt(cmdOpts.rounds);
-      if (rounds !== 1 && rounds !== 2) {
+      if (cmdOpts.rounds !== '1' && cmdOpts.rounds !== '2') {
         console.error('--rounds must be 1 or 2');
         process.exit(1);
       }
+      const rounds = Number(cmdOpts.rounds) as 1 | 2;
+      const configs = ensureConfigs();
+      const { ctx, deadline } = makeContext(cmdOpts, say);
+      say('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
       const recall = cmdOpts.recall === false ? null : buildRecallBlock();
-      if (recall) console.log('Loaded prior board context (' + recall.length + ' chars)');
+      if (recall) say('Loaded prior board context (' + recall.length + ' chars)');
       const result = await runBoardroom(configs, question, {
-        rounds: rounds as 1 | 2,
+        rounds,
         maxTokens,
         consultant: cmdOpts.consultant,
         recall,
         ctx,
       });
-      renderBoardroom(result);
+      if (cmdOpts.json) console.log(JSON.stringify(result, null, 2));
+      else renderBoardroom(result);
       // Usage is appended to the ledger as each call settles, so nothing is
       // lost to process.exit, Ctrl-C or a crash.
       deadline.dispose();
-      process.exit(0);
+      process.exit(askExitCode(result));
     });
 
   // ----- resolution mode (Robert's Rules, motion → second → debate → vote → minutes) -----
@@ -94,16 +115,18 @@ export async function main(): Promise<void> {
     .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
     .option('--concurrency <n>', 'Max provider calls in flight', String(DEFAULT_CONCURRENCY))
     .option('--deadline <ms>', 'Wall-clock budget for the whole run', String(DEFAULT_DEADLINE_MS))
+    .option('--json', 'Emit the full result as JSON on stdout; progress lines go to stderr')
     .action(async (textParts: string[], cmdOpts: RunFlags & { maxTokens: string; consultant: boolean; recall: boolean }) => {
       const motion = textParts.join(' ');
+      const say = progressTo(cmdOpts.json);
       const maxTokens = positiveInt(cmdOpts.maxTokens, '--max-tokens');
       const configs = ensureConfigs();
-      const { ctx, deadline } = makeContext(cmdOpts);
-      console.log('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
-      console.log('Motion phases: brief → second → debate → vote → minutes');
+      const { ctx, deadline } = makeContext(cmdOpts, say);
+      say('Convening ' + configs.length + ' advisors: ' + describeAssignment(configs));
+      say('Motion phases: brief → second → debate → vote → minutes');
       const recall = cmdOpts.recall === false ? null : buildRecallBlock();
-      if (recall) console.log('Loaded prior board context (' + recall.length + ' chars)');
-      console.log();
+      if (recall) say('Loaded prior board context (' + recall.length + ' chars)');
+      say('');
       const result = await runMotion(configs, motion, {
         maxTokens,
         consultant: cmdOpts.consultant,
@@ -121,7 +144,8 @@ export async function main(): Promise<void> {
           console.error('Warning: failed to persist decision to state.json:', safeForTerminal(e?.message || String(e)));
         }
       }
-      renderMotion(result);
+      if (cmdOpts.json) console.log(JSON.stringify(result, null, 2));
+      else renderMotion(result);
       deadline.dispose();
       // A run that decided nothing is a failure the shell should see.
       process.exit(result.outcome === 'no_quorum' ? 1 : 0);
@@ -146,16 +170,20 @@ interface RunFlags {
   weeklyCap?: string;
   concurrency?: string;
   deadline?: string;
+  json?: boolean;
 }
 
 /**
  * Build the limits every provider call in this run will be held to. They are
  * applied inside collectStream, so no call site can opt out of them.
  */
-function makeContext(flags: RunFlags): { ctx: RunContext; tracker: CostTracker; deadline: Deadline } {
+function makeContext(
+  flags: RunFlags,
+  say: (line: string) => void = console.log,
+): { ctx: RunContext; tracker: CostTracker; deadline: Deadline } {
   const budget = loadBudget(flags);
   if (budget.sessionCap || budget.dailyCap || budget.weeklyCap) {
-    console.log('Budget caps: ' + describeBudget(budget));
+    say('Budget caps: ' + describeBudget(budget));
   }
   const tracker = new CostTracker(budget);
   const limiter = new Semaphore(Math.max(1, Math.floor(positive(flags.concurrency, DEFAULT_CONCURRENCY))));

@@ -20,6 +20,8 @@ export interface ModelSpec {
   input: number;
   output: number;
   tier: Tier;
+  /** OpenRouter's ID for this model, where it is not `<vendor namespace>/<this key>`. See openRouterId. */
+  openrouter?: string;
 }
 
 export const CATALOG: Record<string, ModelSpec> = {
@@ -96,8 +98,75 @@ export function canonicalModel(model: string): string {
  * stripped for the lookup only; the wire still carries the full string.
  */
 export function catalogKey(model: string): string {
+  // An OpenRouter ID that was declared for a catalog model maps straight back
+  // to it, even where the two spellings differ.
+  const declared = slugToCatalog().get(model.split(':')[0]);
+  if (declared) return declared;
   const base = model.slice(model.lastIndexOf('/') + 1).split(':')[0];
   return canonicalModel(base);
+}
+
+/** OpenRouter's namespace for each vendor. Mostly the vendor name; xAI is the exception. */
+const OPENROUTER_VENDOR: Record<string, string> = {
+  anthropic: 'anthropic',
+  openai: 'openai',
+  xai: 'x-ai',
+  google: 'google',
+  deepseek: 'deepseek',
+  perplexity: 'perplexity',
+};
+
+/**
+ * Operator-declared OpenRouter IDs, for where the derived one is wrong:
+ *   BOARDROOM_OPENROUTER_IDS="claude-haiku-4-5-20251001=anthropic/claude-haiku-4.5"
+ * A malformed entry is an error, not a silent fallback.
+ */
+export function parseOpenRouterIds(raw: string | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const entry of (raw ?? '').split(',').map(e => e.trim()).filter(Boolean)) {
+    const m = entry.match(/^([^=\s]+)=([^=\s/]+\/[^=\s]+)$/);
+    if (!m) {
+      throw new BoardRoomError(
+        `BOARDROOM_OPENROUTER_IDS entry "${entry}" must look like catalog-model=vendor/model`,
+        'INVALID_ARGUMENT',
+      );
+    }
+    out.set(m[1], m[2]);
+  }
+  return out;
+}
+
+/**
+ * The ID OpenRouter serves a catalog model under, or null for a model the
+ * catalog does not carry.
+ *
+ * OpenRouter does not take a vendor's bare ID: it wants `openai/gpt-5-nano`,
+ * not `gpt-5-nano`. `delegate` used to send the bare catalog ID, so on the
+ * OpenRouter backend every delegated call was refused.
+ *
+ * Precedence: BOARDROOM_OPENROUTER_IDS, then the catalog entry's own
+ * `openrouter` field, then `<vendor namespace>/<catalog id>`. The derived
+ * form is a convention, not a guarantee; `delegate --verify-catalog` on the
+ * OpenRouter backend checks every one against the live list.
+ */
+export function openRouterId(model: string): string | null {
+  const key = canonicalModel(model);
+  if (!Object.prototype.hasOwnProperty.call(CATALOG, key)) return null;
+  const spec = CATALOG[key];
+  return (
+    parseOpenRouterIds(process.env.BOARDROOM_OPENROUTER_IDS).get(key) ??
+    spec.openrouter ??
+    `${OPENROUTER_VENDOR[spec.vendor] ?? spec.vendor}/${key}`
+  );
+}
+
+function slugToCatalog(): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const key of Object.keys(CATALOG)) {
+    const id = openRouterId(key);
+    if (id) out.set(id, key);
+  }
+  return out;
 }
 
 function catalogSpec(model: string): ModelSpec | undefined {
