@@ -1,10 +1,13 @@
 import chalk from 'chalk';
 import type { BoardroomResult } from './protocol.js';
 import type { PanelistAnswer } from './panel.js';
+import { safeDeep } from '../util/terminal.js';
 
 // Cost is recorded at the point of the call, in collectStream. Rendering only
 // displays what was already spent; it must never be where accounting happens.
-export function renderBoardroom(r: BoardroomResult): void {
+export function renderBoardroom(raw: BoardroomResult): void {
+  // Everything below prints provider text; render only from an inert copy.
+  const r = safeDeep(raw);
   console.log(chalk.bold.cyan('\n=== BOARDROOM ==='));
   console.log(chalk.dim(r.question));
   console.log();

@@ -433,10 +433,20 @@ describe('S-012: stdout carries only the command\'s own output', () => {
     writeFileSync(join(cwd, '.env'), 'UNRELATED=1\n');
     // Run from another directory, so the loader is named by absolute URL.
     const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm')).href;
+    // The CLI also reads BoardRoom's own project-root .env. Pinning the
+    // backend and blanking every key (dotenv never overrides a set variable)
+    // keeps a developer's real keys there from turning this into a paid call.
+    const isolated = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      BOARDROOM_BACKEND: 'keys',
+      ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', XAI_API_KEY: '',
+      GOOGLE_API_KEY: '', DEEPSEEK_API_KEY: '', PERPLEXITY_API_KEY: '',
+    };
     const run = spawnSync(
       process.execPath,
       ['--import', tsx, join(REPO, 'bin', 'boardroom.ts'), 'delegate', '--json', 'x'],
-      { cwd, encoding: 'utf-8', env: { PATH: process.env.PATH, HOME: process.env.HOME } },
+      { cwd, encoding: 'utf-8', env: isolated },
     );
     assert.equal(run.stdout, '', `stdout was: ${run.stdout}`);
     assert.match(run.stderr, /No providers detected/);

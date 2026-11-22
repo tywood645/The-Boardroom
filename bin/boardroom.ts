@@ -1,15 +1,17 @@
 #!/usr/bin/env node
-import { config as loadDotenv } from 'dotenv';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadTrustedEnv } from '../src/util/env.js';
+import { safeForTerminal } from '../src/util/terminal.js';
 
-// Load environment variables from a project-root .env file (see .env.example).
-// quiet: dotenv 17 otherwise prints a banner (with a promotional tip) to
-// stdout on every run, which corrupts machine-readable output such as
-// `delegate --json`.
-loadDotenv({ quiet: true });
+// Settings come from the environment, ~/.boardroom/.env and BoardRoom's own
+// project root, never from the directory the command runs in. See
+// src/util/env.ts for why.
+loadTrustedEnv({ binDir: dirname(fileURLToPath(import.meta.url)) });
 
 import { main } from '../src/cli.js';
 
 main().catch((e: unknown) => {
-  console.error('Fatal:', e instanceof Error ? e.message : e);
+  console.error('Fatal:', safeForTerminal(e instanceof Error ? e.message : String(e)));
   process.exit(1);
 });

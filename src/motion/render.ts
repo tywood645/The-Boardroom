@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import type { MotionResult } from './types.js';
 import { quorumStatement } from './minutes.js';
+import { safeDeep } from '../util/terminal.js';
 
 /**
  * Total spend for a motion. Every phase now carries its own recorded cost, so
@@ -15,7 +16,9 @@ export function motionCost(r: MotionResult): number {
   );
 }
 
-export function renderMotion(r: MotionResult): void {
+export function renderMotion(raw: MotionResult): void {
+  // Everything below prints provider text; render only from an inert copy.
+  const r = safeDeep(raw);
   console.log(chalk.bold.cyan('\n=== MOTION BEFORE THE BOARD ==='));
   console.log(chalk.italic('"' + r.motion + '"'));
   console.log();

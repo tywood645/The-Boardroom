@@ -14,6 +14,7 @@ import { appendDecision } from './state/store.js';
 import { buildRecallBlock } from './state/format.js';
 import { registerDelegate } from './cli/delegate.js';
 import { positive, positiveInt } from './cli/args.js';
+import { safeForTerminal } from './util/terminal.js';
 
 export async function main(): Promise<void> {
   const program = new Command()
@@ -97,7 +98,7 @@ export async function main(): Promise<void> {
         try {
           appendDecision(result);
         } catch (e: any) {
-          console.error('Warning: failed to persist decision to state.json:', e?.message || e);
+          console.error('Warning: failed to persist decision to state.json:', safeForTerminal(e?.message || String(e)));
         }
       }
       renderMotion(result);
