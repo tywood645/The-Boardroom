@@ -267,6 +267,46 @@ describe('delegation ledger and measured tiers', () => {
     assert.equal(pickStartTier('summarize', loadStats(records)).tier, 'cheap');
   });
 
+  // R-006: unsatisfiable tasks, refuted at every tier, used to promote a
+  // class to the top tier for everyone, where nothing could demote it.
+  it('ignores runs in which nothing was ever confirmed', () => {
+    const records = Array.from({ length: 10 }, (_, i) => [
+      rec({ runId: `bad-${i}`, tier: 'cheap', outcome: 'refuted' }),
+      rec({ runId: `bad-${i}`, tier: 'mid', outcome: 'refuted' }),
+      rec({ runId: `bad-${i}`, tier: 'frontier', outcome: 'unverified' }),
+    ]).flat();
+    assert.equal(loadStats(records).size, 0);
+    assert.equal(pickStartTier('summarize', loadStats(records)).tier, TIER_PRIORS.summarize);
+  });
+
+  it('counts a refutation only when a higher tier in the same run was confirmed', () => {
+    const records = Array.from({ length: 6 }, (_, i) => [
+      rec({ runId: `r-${i}`, tier: 'cheap', outcome: 'refuted' }),
+      rec({ runId: `r-${i}`, tier: 'mid', outcome: 'confirmed' }),
+    ]).flat();
+    // A refutation from an unrelated run is not evidence against cheap.
+    records.push(rec({ runId: 'other', tier: 'cheap', outcome: 'refuted' }));
+    const stats = loadStats(records);
+    assert.equal(stats.get('summarize:cheap')?.n, 6);
+    assert.equal(pickStartTier('summarize', stats).tier, 'mid');
+  });
+
+  it('survives the attack end to end and still routes cheap', async () => {
+    restoreFetch();
+    installMockFetch();
+    onFetch(replyBy(body =>
+      isCheck(body) ? 'VERDICT: REFUTED\nDEFECT: it cannot satisfy both contradictory requirements' : 'answer',
+    ));
+    for (let i = 0; i < 6; i++) {
+      await delegate('Reply with one word that is both "yes" and "no".', CONFIGS, {}, { taskClass: 'draft' });
+    }
+    const refuted = readDelegations().filter(r => r.cls === 'draft' && r.outcome === 'refuted');
+    assert.ok(refuted.length >= 12, `the attack wrote its records (${refuted.length})`);
+    const choice = pickStartTier('draft', loadStats());
+    assert.equal(choice.tier, TIER_PRIORS.draft);
+    restoreFetch();
+  });
+
   it('ignores unverified attempts, which say nothing about quality', () => {
     const stats = loadStats(Array.from({ length: 20 }, () => rec({ outcome: 'unverified' })));
     assert.equal(stats.size, 0);

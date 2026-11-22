@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
 import { collectStream, type RunContext, type Collected } from '../provider/collect.js';
@@ -109,7 +110,8 @@ export async function delegate(
   const startWhy =
     startTier === picked.tier ? picked.why : `${picked.why}; raised to ${startTier} by --min-tier`;
 
-  const runId = `${Date.now().toString(36)}-${cls}`;
+  // Stats group attempts by run, so ids from parallel processes must not collide.
+  const runId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}-${cls}`;
   const result: DelegateResult = {
     task,
     cls,
