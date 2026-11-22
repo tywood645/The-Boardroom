@@ -46,7 +46,7 @@ export class AnthropicProvider extends LLMProvider {
   get modelId(): string { return this.model; }
 
   async *createMessage(params: MessageCreateParams): AsyncGenerator<StreamEvent> {
-    const body = {
+    const body: Record<string, unknown> = {
       model: params.model || this.model,
       max_tokens: params.maxTokens,
       system: params.system,
@@ -54,6 +54,13 @@ export class AnthropicProvider extends LLMProvider {
       tools: params.tools.length > 0 ? params.tools : undefined,
       stream: true,
     };
+    // Structured output here is a tool the model is forced to call: its
+    // arguments are the object, streamed as input_json_delta events.
+    if (params.responseFormat) {
+      const { name, schema } = params.responseFormat;
+      body.tools = [{ name, description: 'Record your answer.', input_schema: schema }];
+      body.tool_choice = { type: 'tool', name };
+    }
 
     let lastError: Error | null = null;
     // Retrying is only safe before the first content delta reaches the consumer.

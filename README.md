@@ -230,6 +230,8 @@ It asks every credentialed vendor which models it actually serves and exits non-
 
 The checker is chosen from the catalog, ignoring `--model` and `BOARDROOM_TIER_*` pins (a pin names the worker, and the checker must be a different model), and from a different vendor wherever one is credentialed at that tier; a same-vendor sibling is used only when it is all there is, and the verdict says so. Verdicts and votes are read strictly: the field must be a line of its own, an echoed format line (`VERDICT: CONFIRMED | REFUTED`) is not an answer, and a reply that contradicts itself counts as no answer.
 
+**Structured replies where the vendor supports them.** With per-vendor keys, seconds, stances, votes and verdicts are requested as a small JSON object instead of formatted lines: a forced tool call on Anthropic, a JSON Schema on OpenAI, xAI, Google and Perplexity, and JSON mode on DeepSeek. The reply is checked against the allowed values; anything that does not validate falls back to the line parser, so an unreadable reply is still an abstention, never a guess. Which vendor accepts which form comes from their public documentation, not from live testing, so each request is guarded: a vendor that rejects one is retried once in the line format and not asked again for the rest of the run. OpenRouter and Ollama stay on the line format, because the model behind a seat there is whatever you configured. `BOARDROOM_STRUCTURED=off` turns the feature off everywhere.
+
 Exit codes: `0` an answer that was not refuted, `1` no answer, `2` the only answer produced was refuted by the checker and no better attempt completed.
 
 `delegate` works on all three backends:

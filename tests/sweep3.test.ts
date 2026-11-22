@@ -50,7 +50,7 @@ const DELEGATES: ProviderConfig[] = [
 const ENV = [
   'HOME', 'BOARDROOM_BACKEND', 'OPENROUTER_API_KEY', 'OLLAMA_HOST', 'BOARDROOM_MODEL_PRICES',
   'BOARDROOM_SESSION_CAP', 'BOARDROOM_DAILY_CAP', 'BOARDROOM_WEEKLY_CAP', 'BOARDROOM_WARN_AT',
-  'BOARDROOM_TIER_CHEAP', 'BOARDROOM_TIER_MID', 'BOARDROOM_TIER_FRONTIER', 'BOARDROOM_VERIFY_FRONTIER',
+  'BOARDROOM_TIER_CHEAP', 'BOARDROOM_TIER_MID', 'BOARDROOM_TIER_FRONTIER', 'BOARDROOM_VERIFY_FRONTIER', 'BOARDROOM_STRUCTURED',
   'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY', 'GOOGLE_API_KEY', 'DEEPSEEK_API_KEY', 'PERPLEXITY_API_KEY',
 ];
 
@@ -74,6 +74,9 @@ beforeEach(() => {
   process.env.HOME = mkdtempSync(join(tmpRoot, 'h-'));
   // Top-tier sampling is random by default; these tests need it off.
   process.env.BOARDROOM_VERIFY_FRONTIER = '0';
+  // These tests are about the line format and count requests; structured
+  // output and its fallback retry are covered in tests/structured.test.ts.
+  process.env.BOARDROOM_STRUCTURED = 'off';
   restoreFetch();
   installMockFetch();
 });

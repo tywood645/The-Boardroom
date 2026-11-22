@@ -38,6 +38,25 @@ export interface MessageCreateParams {
   model: string;
   /** Run-level wall-clock deadline. Aborts connect and body alike. */
   signal?: AbortSignal;
+  /** Ask the vendor to return a JSON object of this shape as the reply text. */
+  responseFormat?: ResponseFormat;
+}
+
+/**
+ * How a vendor is asked for structured output:
+ *   tool         a forced tool call whose arguments are the object (Anthropic)
+ *   json_schema  `response_format` with a JSON Schema (OpenAI-compatible)
+ *   json_object  `response_format` JSON mode, shape described in the prompt only
+ */
+export type StructuredMode = 'tool' | 'json_schema' | 'json_object';
+
+export interface ResponseFormat {
+  mode: StructuredMode;
+  /** Name of the schema or tool: letters, digits and underscores. */
+  name: string;
+  schema: Record<string, unknown>;
+  /** Send `strict: true` with a json_schema. Only for vendors that document it. */
+  strict?: boolean;
 }
 
 export type StreamEvent =

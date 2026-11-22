@@ -9,7 +9,8 @@ import { resolveTier, nextTier, hasNoTiers, type Resolution } from './tiers.js';
 import { classify, type TaskClass } from './classify.js';
 import { loadStats, pickStartTier } from './stats.js';
 import { appendDelegation, type Outcome } from './ledger.js';
-import { VERIFY_SYSTEM, buildVerifyPrompt, parseVerdict, type Verdict } from './verify.js';
+import { verifySystem, VERDICT_SHAPE, buildVerifyPrompt, parseVerdict, type Verdict } from './verify.js';
+import { collectStructured } from '../provider/structured.js';
 
 /**
  * Cheap-first escalation.
@@ -315,11 +316,14 @@ async function runCheck(
   if (sameTierOnly && checker.downgradedFrom) return null;
 
   try {
-    const collected = await callOnce(
+    const collected = await collectStructured(
       checker.config,
-      VERIFY_SYSTEM,
-      buildVerifyPrompt(task, answer),
-      Math.min(maxTokens, 200),
+      {
+        system: verifySystem,
+        prompt: () => buildVerifyPrompt(task, answer),
+        maxTokens: Math.min(maxTokens, 200),
+        shape: VERDICT_SHAPE,
+      },
       ctx,
     );
     const verdict = parseVerdict(collected.text);
