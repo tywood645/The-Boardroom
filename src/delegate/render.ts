@@ -4,6 +4,7 @@ import { describeTiers } from './tiers.js';
 import { formatStats, loadStats } from './stats.js';
 import type { ProviderConfig } from '../provider/factory.js';
 import type { VerifyResult } from './verify-catalog.js';
+import { safeDeep, safeForTerminal } from '../util/terminal.js';
 
 const OUTCOME_STYLE: Record<string, (s: string) => string> = {
   confirmed: chalk.bold.green,
@@ -14,7 +15,9 @@ const OUTCOME_STYLE: Record<string, (s: string) => string> = {
   budget_blocked: chalk.bold.red,
 };
 
-export function renderDelegation(r: DelegateResult, explain: boolean): void {
+export function renderDelegation(raw: DelegateResult, explain: boolean): void {
+  // Everything below prints provider text; render only from an inert copy.
+  const r = safeDeep(raw);
   if (explain) {
     console.log(chalk.dim(`class:  ${r.cls} (${r.classifiedWhy})`));
     console.log(chalk.dim(`start:  ${r.startTier} (${r.startWhy})`));
@@ -61,7 +64,9 @@ const VERIFY_STYLE: Record<string, (s: string) => string> = {
   unreachable: chalk.bold.yellow,
 };
 
-export function renderVerifyCatalog(result: VerifyResult, strict = false): void {
+export function renderVerifyCatalog(raw: VerifyResult, strict = false): void {
+  // Vendor ids and error details come from the vendors; render an inert copy.
+  const result = safeDeep(raw);
   console.log(chalk.bold.cyan('=== Catalog vs vendor ==='));
   console.log(chalk.dim('What each vendor says it still serves, against what the catalog carries.'));
 
@@ -97,10 +102,10 @@ export function renderVerifyCatalog(result: VerifyResult, strict = false): void 
 export function renderStats(configs: ProviderConfig[]): void {
   console.log(chalk.bold.cyan('=== Tier resolution ==='));
   console.log(chalk.dim('What each tier resolves to with the vendors currently credentialed.'));
-  for (const line of describeTiers(configs)) console.log('  ' + line);
+  for (const line of describeTiers(configs)) console.log('  ' + safeForTerminal(line));
 
   console.log();
   console.log(chalk.bold.cyan('=== Measured delegation ==='));
   console.log(chalk.dim('Confirm rate per task class and tier, from verified runs in delegations.jsonl.'));
-  for (const line of formatStats(loadStats())) console.log('  ' + line);
+  for (const line of formatStats(loadStats())) console.log('  ' + safeForTerminal(line));
 }

@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { boardroomSubdir } from '../util/paths.js';
+import { safeDeep } from '../util/terminal.js';
 import type { MotionResult } from './types.js';
 
 export function meetingsDir(): string {
@@ -13,7 +14,8 @@ export function meetingsDir(): string {
  */
 export function writeMinutes(result: MotionResult): string {
   const dir = meetingsDir();
-  const md = renderMinutes(result);
+  // Minutes get cat-ed to a terminal later; write provider text inert.
+  const md = renderMinutes(safeDeep(result));
   for (let n = 0; ; n++) {
     const path = join(dir, n === 0 ? `${result.id}.md` : `${result.id}-${n}.md`);
     try {

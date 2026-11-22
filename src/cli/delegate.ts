@@ -11,6 +11,7 @@ import { verifyCatalog } from '../delegate/verify-catalog.js';
 import { isTaskClass, TASK_CLASSES, type TaskClass } from '../delegate/classify.js';
 import { TIERS, type Tier } from '../cost/catalog.js';
 import { positive, positiveInt } from './args.js';
+import { safeForTerminal } from '../util/terminal.js';
 
 // delegate is the automated path, so it ships with caps on by default rather than
 // waiting for someone to remember to set them.
@@ -155,7 +156,7 @@ export function registerDelegate(program: Command): void {
         process.exit(delegateExitCode(result));
       } catch (e: any) {
         deadline.dispose();
-        console.error(e?.message || String(e));
+        console.error(safeForTerminal(e?.message || String(e)));
         process.exit(1);
       }
     });
