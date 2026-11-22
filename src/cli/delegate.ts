@@ -134,7 +134,8 @@ export function registerDelegate(program: Command): void {
       };
 
       if (flags.explain) {
-        console.log(`budget: ${describeBudget(budget)}`);
+        // On stderr when --json is set, so stdout stays one JSON document.
+        (flags.json ? console.error : console.log)(`budget: ${describeBudget(budget)}`);
       }
 
       try {

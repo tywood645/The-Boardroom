@@ -1,4 +1,4 @@
-import { CATALOG, canonicalModel } from '../cost/catalog.js';
+import { CATALOG, canonicalModel, openRouterId } from '../cost/catalog.js';
 import { Deadline } from '../util/abort.js';
 import type { ProviderConfig } from '../provider/factory.js';
 
@@ -109,19 +109,54 @@ function catalogModelsFor(vendor: string): string[] {
     .map(([model]) => model);
 }
 
-async function checkVendor(config: ProviderConfig, signal: AbortSignal): Promise<VendorReport> {
+/** One model list per endpoint per run: on a gateway all six seats share one. */
+type ListCache = Map<string, Promise<string[]>>;
+
+function listOnce(config: ProviderConfig, signal: AbortSignal, cache: ListCache): Promise<string[]> {
+  const { url } = endpointFor(config);
+  let pending = cache.get(url);
+  if (!pending) {
+    pending = listVendorModels(config, signal);
+    cache.set(url, pending);
+  }
+  return pending;
+}
+
+/**
+ * On OpenRouter the question is different: not "does the vendor still serve
+ * this ID" but "does OpenRouter serve it under the ID we would send". The
+ * catalog's OpenRouter IDs are mostly derived by convention (openRouterId), so
+ * this is the check that proves them. A missing entry here is reported with
+ * the ID that was looked for, and BOARDROOM_OPENROUTER_IDS corrects it.
+ */
+function checkOpenRouter(vendor: string, expected: string[], served: string[]): VendorReport {
+  const offered = new Set(served);
+  const idOf = (m: string) => openRouterId(m) ?? m;
+  const confirmed = expected.filter(m => offered.has(idOf(m)));
+  const missing = expected.filter(m => !offered.has(idOf(m))).map(m => `${m} (looked for ${idOf(m)})`);
+  const carried = new Set(expected.map(idOf));
+  const namespaces = new Set(expected.map(m => idOf(m).split('/')[0]));
+  const uncatalogued = [...offered]
+    .filter(id => namespaces.has(id.split('/')[0]) && !carried.has(id))
+    .sort();
+  return { vendor, status: missing.length > 0 ? 'stale' : 'ok', confirmed, missing, uncatalogued };
+}
+
+async function checkVendor(config: ProviderConfig, signal: AbortSignal, cache: ListCache): Promise<VendorReport> {
   const vendor = config.name;
   const expected = catalogModelsFor(vendor);
   const base: VendorReport = { vendor, status: 'ok', confirmed: [], missing: [], uncatalogued: [] };
 
   let served: string[];
   try {
-    served = await listVendorModels(config, signal);
+    served = await listOnce(config, signal, cache);
   } catch (e: any) {
     // A vendor we cannot ask is not evidence that the catalog is wrong, so this
     // is reported rather than failed. It does mean the pass was not complete.
     return { ...base, status: 'unreachable', detail: e?.message || String(e) };
   }
+
+  if (config.backend === 'openrouter') return checkOpenRouter(vendor, expected, served);
 
   const offered = new Set(served.map(normalizeId));
   const confirmed = expected.filter(m => offered.has(normalizeId(m)));
@@ -145,22 +180,28 @@ export async function verifyCatalog(
   const credentialed = new Map(configs.map(c => [c.name, c]));
   const vendors = [...new Set(Object.values(CATALOG).map(s => s.vendor))].sort();
 
+  const skipped = (vendor: string, detail: string): VendorReport => ({
+    vendor, status: 'skipped', detail, confirmed: [], missing: [], uncatalogued: [],
+  });
+
+  // A local backend serves none of the catalog's cloud models, by design.
+  // Comparing the two would call every entry stale and fail the run.
+  if (configs.some(c => c.backend === 'ollama')) {
+    return {
+      reports: vendors.map(v => skipped(v, 'local backend: the catalog does not apply')),
+      ok: true,
+      incomplete: true,
+    };
+  }
+
   const deadline = new Deadline(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 'verify-catalog');
+  const cache: ListCache = new Map();
   try {
     const reports = await Promise.all(
       vendors.map(async (vendor): Promise<VendorReport> => {
         const config = credentialed.get(vendor);
-        if (!config) {
-          return {
-            vendor,
-            status: 'skipped',
-            detail: 'no credentials',
-            confirmed: [],
-            missing: [],
-            uncatalogued: [],
-          };
-        }
-        return checkVendor(config, deadline.signal);
+        if (!config) return skipped(vendor, 'no credentials');
+        return checkVendor(config, deadline.signal, cache);
       }),
     );
 

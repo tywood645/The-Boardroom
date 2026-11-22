@@ -174,7 +174,13 @@ boardroom --no-recall "Fresh perspective on business model"
 
 # Custom response budget
 boardroom --max-tokens 2048 "Deep strategy question"
+
+# Machine-readable: the full result as JSON on stdout, progress on stderr
+boardroom --json "Should we raise prices?" > result.json
+boardroom motion --json "Adopt the plan" > motion.json
 ```
+
+Exit codes: `boardroom` (ask) exits `0` when at least one advisor answered and `1` when none did. `boardroom motion` exits `1` when there was no quorum, `0` otherwise.
 
 Default response budgets are 1024 tokens per panelist in `ask` mode and 600 tokens per phase response in `motion` mode.
 
@@ -226,6 +232,12 @@ The checker is chosen from the catalog, ignoring `--model` and `BOARDROOM_TIER_*
 
 Exit codes: `0` an answer that was not refuted, `1` no answer, `2` the only answer produced was refuted by the checker and no better attempt completed.
 
+`delegate` works on all three backends:
+
+- **Per-vendor keys:** as described above.
+- **OpenRouter:** the same tiers and catalog, with each model sent under its OpenRouter ID (`openai/gpt-5-nano`, `x-ai/grok-4.5`). Those IDs are derived as `<vendor>/<catalog id>`, which is a convention, not a guarantee. Run `boardroom delegate --verify-catalog` with the OpenRouter backend selected to check every one against OpenRouter's live list, and correct any that differ with `BOARDROOM_OPENROUTER_IDS` (see `.env.example`).
+- **Ollama:** a local install has no price tiers, so every tier resolves to your configured local model and nothing escalates. If a second seat has a different local model, it checks the answer; a refuted answer is returned marked as refuted, with exit code `2`.
+
 Caps must be positive amounts; a value that is not (a typo, `0`) stops the run instead of running uncapped, and `--session-cap none` turns one off deliberately. `delegate` defaults to a $1.00 session cap unless `BOARDROOM_SESSION_CAP` or the flag says otherwise. A model with no catalog entry is priced at the catalog's highest rate so a cap still holds; set `BOARDROOM_MODEL_PRICES` to give its real price.
 
 **Delegation is measured, not guessed.** Every attempt lands in `~/.boardroom/delegations.jsonl` with its tier, vendor, cost, latency and outcome. `pickStartTier` starts from the class prior and walks up while the measured confirm rate at the current tier is poor, needing a minimum sample count so one bad run never moves the delegator. A refutation counts against a tier only when a higher tier in the same run was then confirmed; runs where nothing was ever confirmed say the task was unsatisfiable, not that the tier was weak, and are ignored, so crafted tasks cannot push routing up the ladder. Every decision carries a `why` string naming its evidence — a delegator you cannot audit is a delegator you will not trust.
@@ -276,7 +288,6 @@ No LLM SDK dependency: both provider clients are hand-rolled `fetch` + SSE.
 
 These are directions the architecture already invites, not commitments:
 
-- Delegation over OpenRouter and Ollama slugs (both backends currently seat the board only; the delegator reads per-vendor keys).
 - Prompt caching across the three motion phases, which resend the same recall and briefing to the same vendor each time.
 - Configurable vendor-to-role assignment (the map is currently fixed in `roles.ts`).
 - Richer minutes: per-advisor token and cost breakdown inside the meeting file.

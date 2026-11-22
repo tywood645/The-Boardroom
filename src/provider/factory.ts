@@ -8,6 +8,12 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   baseUrl?: string;
+  /**
+   * Which backend built this config. Tier resolution needs it: a gateway takes
+   * its own model IDs, and a local backend has no price tiers at all. Absent
+   * on hand-built configs, which are treated as per-vendor keys.
+   */
+  backend?: Backend;
 }
 
 export function createProvider(config: ProviderConfig): LLMProvider {
@@ -59,6 +65,7 @@ function detectKeyProviders(): ProviderConfig[] {
         type: seat.type,
         apiKey,
         model: process.env[seatModelEnv(seat.name)] || seat.model,
+        backend: 'keys',
         ...('baseUrl' in seat ? { baseUrl: seat.baseUrl } : {}),
       },
     ];
@@ -104,6 +111,7 @@ function ollamaBoard(): ProviderConfig[] {
     apiKey: 'ollama', // Ollama ignores the key, but the client expects a value.
     model: seatModel('BOARDROOM_OLLAMA', name, single || OLLAMA_DEFAULT_MODELS[name]),
     baseUrl: host + '/v1',
+    backend: 'ollama' as const,
   }));
 }
 
@@ -118,6 +126,7 @@ function openRouterBoard(): ProviderConfig[] {
     apiKey: key,
     model: seatModel('BOARDROOM_OPENROUTER', name, single || 'meta-llama/llama-3.1-8b-instruct'),
     baseUrl: 'https://openrouter.ai/api/v1',
+    backend: 'openrouter' as const,
   }));
 }
 

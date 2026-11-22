@@ -1,6 +1,6 @@
-import type { ProviderConfig } from '../provider/factory.js';
+import type { ProviderConfig, Backend } from '../provider/factory.js';
 import type { Tier } from '../cost/catalog.js';
-import { TIERS, CATALOG, blendedPrice, modelsInTier } from '../cost/catalog.js';
+import { TIERS, CATALOG, blendedPrice, modelsInTier, openRouterId } from '../cost/catalog.js';
 import { BoardRoomError } from '../util/error.js';
 
 export type { Tier };
@@ -57,6 +57,65 @@ function parsePin(raw: string): { vendor: string; model: string } {
   return { vendor: raw.slice(0, idx), model: raw.slice(idx + 1) };
 }
 
+/** The backend a set of configs came from. Hand-built configs count as per-vendor keys. */
+export function backendOf(configs: ProviderConfig[]): Backend {
+  return configs[0]?.backend ?? 'keys';
+}
+
+/** True when the backend has one flat pool of models and so nothing to escalate to. */
+export function hasNoTiers(configs: ProviderConfig[]): boolean {
+  return backendOf(configs) === 'ollama';
+}
+
+/**
+ * The model string to put on the wire for a catalog model.
+ *
+ * `Resolution.model` stays the catalog ID, which is what the ledger, stats and
+ * exclusion lists key on. Only the request carries the backend's spelling. A
+ * model already written as `vendor/model`, or one the catalog does not carry,
+ * is passed through as given.
+ */
+export function wireModel(model: string, backend: Backend): string {
+  if (backend !== 'openrouter' || model.includes('/')) return model;
+  return openRouterId(model) ?? model;
+}
+
+/**
+ * Tier resolution for a local backend.
+ *
+ * Catalog tiers are price bands across cloud vendors; a local Ollama install
+ * has neither prices nor those models, and `delegate` used to ask it for
+ * `gpt-5-nano`. Every tier resolves to a configured local model instead. An
+ * excluded model is excluded on every seat, so a checker is never the same
+ * model under another seat's name.
+ */
+function resolveLocal(
+  tier: Tier,
+  configs: ProviderConfig[],
+  excluded: Set<string>,
+  opts: ResolveOptions,
+): Resolution {
+  const excludedModels = new Set([...excluded].map(e => e.slice(e.indexOf(':') + 1)));
+  const candidates = configs.filter(
+    c => !excludedModels.has(c.model) && (!opts.onlyVendors || opts.onlyVendors.includes(c.name)),
+  );
+  const best = candidates[0];
+  if (!best) {
+    throw new DelegationError(
+      `No other local model is configured. Set a different model on another seat ` +
+        `(for example BOARDROOM_OLLAMA_OPENAI) to have one check another's work.`,
+    );
+  }
+  return {
+    tier,
+    config: best,
+    vendor: best.name,
+    model: best.model,
+    blended: 0,
+    reason: 'local model (the Ollama backend has no price tiers)',
+  };
+}
+
 /**
  * Resolve a tier to a concrete vendor and model.
  *
@@ -77,6 +136,7 @@ export function resolveTier(
 ): Resolution {
   const byVendor = new Map(configs.map(c => [c.name, c]));
   const excluded = new Set(opts.exclude ?? []);
+  const backend = backendOf(configs);
 
   const override = opts.ignorePins ? undefined : pin ?? process.env[ENV_BY_TIER[tier]];
   if (override) {
@@ -87,16 +147,18 @@ export function resolveTier(
         `Tier "${tier}" is pinned to ${vendor}:${model}, but no credentials were detected for ${vendor}.`,
       );
     }
-    const spec = CATALOG[model];
+    const spec = Object.prototype.hasOwnProperty.call(CATALOG, model) ? CATALOG[model] : undefined;
     return {
       tier,
-      config: withModel(config, model),
+      config: withModel(config, wireModel(model, backend)),
       vendor,
       model,
       blended: spec ? blendedPrice(spec) : Number.POSITIVE_INFINITY,
       reason: pin ? 'pinned by flag' : `pinned by ${ENV_BY_TIER[tier]}`,
     };
   }
+
+  if (backend === 'ollama') return resolveLocal(tier, configs, excluded, opts);
 
   // Walk down from the requested tier so a missing tier degrades instead of failing.
   const startIndex = TIERS.indexOf(tier);
@@ -116,7 +178,7 @@ export function resolveTier(
 
     const resolution: Resolution = {
       tier: candidateTier,
-      config: withModel(byVendor.get(best.spec.vendor)!, best.model),
+      config: withModel(byVendor.get(best.spec.vendor)!, wireModel(best.model, backend)),
       vendor: best.spec.vendor,
       model: best.model,
       blended: blendedPrice(best.spec),
