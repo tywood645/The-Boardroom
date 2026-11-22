@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { ProviderConfig } from '../provider/factory.js';
 import { createProvider } from '../provider/factory.js';
 import { collectStream } from '../provider/collect.js';
@@ -45,7 +46,9 @@ export async function runMotion(
   const consultantEnabled = opts.consultant !== false;
   const recall = opts.recall || null;
   const startedAt = new Date().toISOString();
-  const id = startedAt.slice(0, 16).replace(/[T:]/g, '-');
+  // Minute resolution let two motions share an id, and the second's minutes
+  // replaced the first's. Seconds plus a random suffix cannot collide in practice.
+  const id = `${startedAt.slice(0, 19).replace(/[T:]/g, '-')}-${randomBytes(2).toString('hex')}`;
 
   // Phase 1: Consultant briefing. Recall is also given to the consultant so
   // its research call is grounded in what the board has already settled.
@@ -161,13 +164,21 @@ async function runSecondPhase(
   return results;
 }
 
+/** The format asks for one sentence; anything past the first line or this length is not a reason. */
+const MAX_REASON_CHARS = 300;
+
+/** First line after "REASON:", bounded. Never multi-line, so it cannot carry a payload past itself. */
+function parseReason(cleaned: string): string {
+  const m = cleaned.match(/REASON:[ \t]*([^\n]*)/i);
+  const reason = m && m[1].trim() ? m[1].trim() : cleaned.split('\n')[0].trim();
+  return reason.slice(0, MAX_REASON_CHARS);
+}
+
 function parseSecond(text: string): { seconded: boolean; reason: string } {
   const cleaned = text.trim();
   const secondMatch = cleaned.match(/SECOND:\s*(yes|no)/i);
-  const reasonMatch = cleaned.match(/REASON:\s*(.+?)(?:\n|$)/is);
   const seconded = secondMatch ? secondMatch[1].toLowerCase() === 'yes' : false;
-  const reason = reasonMatch ? reasonMatch[1].trim() : cleaned.slice(0, 200);
-  return { seconded, reason };
+  return { seconded, reason: parseReason(cleaned) };
 }
 
 function makeErrorSecond(cfg: ProviderConfig, error: string): SecondVote {
@@ -329,10 +340,8 @@ async function runVotePhase(
 function parseVote(text: string): { vote: Vote; reason: string } {
   const cleaned = text.trim();
   const voteMatch = cleaned.match(/VOTE:\s*(AYE|NAY|ABSTAIN)/i);
-  const reasonMatch = cleaned.match(/REASON:\s*(.+?)$/is);
   const vote = (voteMatch ? voteMatch[1].toUpperCase() : 'ABSTAIN') as Vote;
-  const reason = reasonMatch ? reasonMatch[1].trim() : cleaned.slice(0, 200);
-  return { vote, reason };
+  return { vote, reason: parseReason(cleaned) };
 }
 
 function stanceVsVote(stance: Stance, vote: Vote): boolean {

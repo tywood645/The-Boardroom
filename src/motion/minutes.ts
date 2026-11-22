@@ -9,12 +9,22 @@ export function meetingsDir(): string {
   return dir;
 }
 
+/**
+ * Minutes are a record: never replace an existing file. 'wx' fails if the path
+ * exists, in which case a numbered sibling is written instead.
+ */
 export function writeMinutes(result: MotionResult): string {
   const dir = meetingsDir();
-  const path = join(dir, `${result.id}.md`);
   const md = renderMinutes(result);
-  writeFileSync(path, md, { mode: 0o600 });
-  return path;
+  for (let n = 0; ; n++) {
+    const path = join(dir, n === 0 ? `${result.id}.md` : `${result.id}-${n}.md`);
+    try {
+      writeFileSync(path, md, { mode: 0o600, flag: 'wx' });
+      return path;
+    } catch (e: any) {
+      if (e?.code !== 'EEXIST' || n >= 100) throw e;
+    }
+  }
 }
 
 function renderMinutes(r: MotionResult): string {
