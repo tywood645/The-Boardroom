@@ -8,11 +8,10 @@ import type { TaskClass } from './classify.js';
 /**
  * Append-only record of what the delegator did and whether it worked.
  *
- * Kept separate from usage.json on purpose. usage.json is the billing ledger,
- * filtered over a 30-day window and rewritten wholesale; this needs a longer
- * window to accumulate enough samples per (class, tier) cell, has a
- * per-attempt schema that means nothing to billing, and is written far more
- * often. JSONL makes each write O(1) instead of a full-file rewrite.
+ * Kept separate from the billing ledger (~/.boardroom/usage/) on purpose.
+ * That one keeps two months and records holds and settlements; this needs a
+ * longer window to accumulate enough samples per (class, tier) cell and has a
+ * per-attempt schema that means nothing to billing.
  *
  * This file is what "measured delegation" is measured from. Without it the
  * tier priors would be guesses that never get corrected.
