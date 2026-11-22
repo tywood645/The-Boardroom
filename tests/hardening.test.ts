@@ -267,3 +267,24 @@ describe('BR-006: .env is read only from trusted places', () => {
     },
   );
 });
+
+describe('release version', () => {
+  const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf-8'));
+
+  it('--version reports package.json, not a hard-coded string', async () => {
+    const { packageVersion } = await import('../src/cli.ts');
+    assert.equal(packageVersion(), pkg.version);
+    const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm')).href;
+    const run = spawnSync(process.execPath, ['--import', tsx, join(REPO, 'bin', 'boardroom.ts'), '--version'], {
+      encoding: 'utf-8',
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
+      timeout: 30_000,
+    });
+    assert.equal(run.stdout.trim(), pkg.version);
+  });
+
+  it('has a changelog entry for the current version', () => {
+    const changelog = readFileSync(join(REPO, 'CHANGELOG.md'), 'utf-8');
+    assert.match(changelog, new RegExp(`^## ${pkg.version.replace(/\./g, '\\.')} `, 'm'));
+  });
+});

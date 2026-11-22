@@ -15,12 +15,32 @@ import { buildRecallBlock } from './state/format.js';
 import { registerDelegate } from './cli/delegate.js';
 import { positive, positiveInt } from './cli/args.js';
 import { safeForTerminal } from './util/terminal.js';
+import { findPackageRoot } from './util/env.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * The version in package.json, the single source of truth. It used to be a
+ * literal here as well, which a release bump could miss, leaving --version
+ * reporting the wrong release.
+ */
+export function packageVersion(): string {
+  const root = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
+  if (!root) return 'unknown';
+  try {
+    const v = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'))?.version;
+    return typeof v === 'string' ? v : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 export async function main(): Promise<void> {
   const program = new Command()
     .name('boardroom')
     .description('Multi-vendor LLM advisory panel for solo founders')
-    .version('0.1.0');
+    .version(packageVersion());
 
   // ----- exploration mode (sealed-bid, original) -----
   program
