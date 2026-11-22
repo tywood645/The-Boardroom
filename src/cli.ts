@@ -6,7 +6,7 @@ import { CostTracker } from './cost/tracker.js';
 import { loadBudget, describeBudget } from './cost/config.js';
 import type { RunContext } from './provider/collect.js';
 import { Semaphore } from './util/semaphore.js';
-import { Deadline } from './util/abort.js';
+import { Deadline, exitCleanlyOnSignal } from './util/abort.js';
 import { runMotion } from './motion/protocol.js';
 import { renderMotion } from './motion/render.js';
 import { writeMinutes } from './motion/minutes.js';
@@ -29,7 +29,7 @@ export async function main(): Promise<void> {
     .option('--max-tokens <n>', 'Max tokens per panelist response', '1024')
     .option('--no-consultant', 'Skip the Consultant research briefing (isolate vendor priors)')
     .option('--no-recall', 'Skip prior board context (default: load ~/.boardroom/context.md + state.json)')
-    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
+    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend ("none" disables)')
     .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
     .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
     .option('--concurrency <n>', 'Max provider calls in flight', String(DEFAULT_CONCURRENCY))
@@ -68,7 +68,7 @@ export async function main(): Promise<void> {
     .option('--max-tokens <n>', 'Max tokens per phase response', '600')
     .option('--no-consultant', 'Skip the Consultant research briefing')
     .option('--no-recall', 'Skip prior board context (default: load ~/.boardroom/context.md + state.json)')
-    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend')
+    .option('--session-cap <usd>', 'Refuse to dispatch a call that would push this run past this spend ("none" disables)')
     .option('--daily-cap <usd>', 'Refuse to dispatch once today\'s recorded spend would exceed this')
     .option('--weekly-cap <usd>', 'Refuse to dispatch once this week\'s recorded spend would exceed this')
     .option('--concurrency <n>', 'Max provider calls in flight', String(DEFAULT_CONCURRENCY))
@@ -91,15 +91,19 @@ export async function main(): Promise<void> {
       });
       result.minutesPath = writeMinutes(result);
       // Persist this decision into the institutional memory so future
-      // meetings see it via --recall.
-      try {
-        appendDecision(result);
-      } catch (e: any) {
-        console.error('Warning: failed to persist decision to state.json:', e?.message || e);
+      // meetings see it via --recall. A run without quorum decided nothing,
+      // so there is nothing to remember as settled.
+      if (result.outcome !== 'no_quorum') {
+        try {
+          appendDecision(result);
+        } catch (e: any) {
+          console.error('Warning: failed to persist decision to state.json:', e?.message || e);
+        }
       }
       renderMotion(result);
       deadline.dispose();
-      process.exit(0);
+      // A run that decided nothing is a failure the shell should see.
+      process.exit(result.outcome === 'no_quorum' ? 1 : 0);
     });
 
   // Tiered dispatch. A sibling of the board, not a layer under it: the board
@@ -133,8 +137,9 @@ function makeContext(flags: RunFlags): { ctx: RunContext; tracker: CostTracker; 
     console.log('Budget caps: ' + describeBudget(budget));
   }
   const tracker = new CostTracker(budget);
-  const limiter = new Semaphore(Math.floor(positive(flags.concurrency, DEFAULT_CONCURRENCY)));
+  const limiter = new Semaphore(Math.max(1, Math.floor(positive(flags.concurrency, DEFAULT_CONCURRENCY))));
   const deadline = new Deadline(positive(flags.deadline, DEFAULT_DEADLINE_MS), 'run');
+  exitCleanlyOnSignal(deadline);
   return { ctx: { tracker, limiter, signal: deadline.signal }, tracker, deadline };
 }
 

@@ -48,7 +48,18 @@ export type Outcome =
   | 'passed'
   | 'failed'
   | 'tied'
-  | 'died_for_lack_of_second';
+  | 'died_for_lack_of_second'
+  // Too few advisors answered for the board to have decided anything. Written
+  // to minutes, never to state.json, so it is not recalled as a settled matter.
+  | 'no_quorum';
+
+/** Why a motion ended without quorum: which phase, and how many answered of how many needed. */
+export interface QuorumShortfall {
+  phase: 'second' | 'vote';
+  present: number;
+  needed: number;
+  seated: number;
+}
 
 export interface MotionResult {
   id: string;                   // ISO timestamp YYYY-MM-DD-HHMM
@@ -61,5 +72,7 @@ export interface MotionResult {
   votes: FinalVote[];
   tally: { aye: number; nay: number; abstain: number };
   outcome: Outcome;
+  /** Set only when outcome is 'no_quorum'. */
+  quorum?: QuorumShortfall;
   minutesPath?: string;
 }

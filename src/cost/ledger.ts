@@ -4,7 +4,6 @@ import {
   closeSync,
   existsSync,
   fstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readSync,
@@ -12,8 +11,8 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { logger } from '../util/logger.js';
+import { boardroomDir, boardroomSubdir } from '../util/paths.js';
 
 /**
  * The billing ledger: append-only JSONL, one file per UTC month.
@@ -60,12 +59,6 @@ export interface ReleaseLine {
 }
 
 export type LedgerLine = UseLine | HoldLine | ReleaseLine;
-
-/**
- * A hold whose process died never gets closed. Past this age it stops counting
- * against anyone's cap. Comfortably longer than any default run deadline.
- */
-export const STALE_HOLD_MS = 15 * 60 * 1000;
 
 interface Spend {
   ts: string;
@@ -127,11 +120,9 @@ export class UsageLedger {
   private legacyLoaded = false;
   private readonly legacyPath: string;
 
-  constructor(root = join(homedir(), '.boardroom')) {
-    if (!existsSync(root)) mkdirSync(root, { recursive: true, mode: 0o700 });
-    this.dir = join(root, 'usage');
-    if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    this.legacyPath = join(root, 'usage.json');
+  constructor() {
+    this.dir = boardroomSubdir('usage');
+    this.legacyPath = join(boardroomDir(), 'usage.json');
     this.prune();
   }
 
@@ -268,12 +259,19 @@ export class UsageLedger {
     return sum;
   }
 
-  /** Open, non-stale holds by other trackers. A hold counts against every window it was opened in. */
-  heldSince(cutoff: string, exceptSrc: string, now = Date.now()): number {
-    const staleBefore = new Date(now - STALE_HOLD_MS).toISOString();
+  /**
+   * Holds by other trackers that were never closed, opened since `cutoff`.
+   *
+   * These never expire. A hold with no settlement is either a call still in
+   * flight or one whose process was interrupted or killed after the request
+   * went out, and in both cases the money may be spent. It used to be dropped
+   * after 15 minutes, which let an interrupted run's spend be forgotten; now
+   * it counts at its worst case for as long as its window lasts.
+   */
+  heldSince(cutoff: string, exceptSrc: string): number {
     let sum = 0;
     for (const h of this.holds.values()) {
-      if (h.src === exceptSrc || h.ts < staleBefore || h.ts < cutoff) continue;
+      if (h.src === exceptSrc || h.ts < cutoff) continue;
       sum += h.cost;
     }
     return sum;

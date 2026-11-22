@@ -1,7 +1,11 @@
 import type { ProviderConfig } from '../provider/factory.js';
 import { askPanel, PanelistAnswer, Seat } from './panel.js';
 import { roleForVendor, ROLES } from './roles.js';
-import { consultBriefing, applyBriefing, ConsultantBriefing } from './consultant.js';
+import { consultBriefing, applyBriefing, briefingBlock, ConsultantBriefing } from './consultant.js';
+import { quoteUntrusted, QUOTED_NOTE } from '../util/sanitize.js';
+
+/** Upper bound on a round-one answer quoted into round two. The format asks for 220 words. */
+const MAX_ANSWER_CHARS = 6000;
 import type { RunContext } from '../provider/collect.js';
 
 export interface BoardroomResult {
@@ -95,11 +99,9 @@ export async function runBoardroom(
     const compiled = formatPanelForReview(round1);
     const round2Question =
       (opts.recall || '') +
-      (briefing
-        ? `RESEARCH BRIEFING (still current):\n${briefing.text}\n\n--- end briefing ---\n\n`
-        : '') +
+      briefingBlock(briefing, 'RESEARCH BRIEFING (still current):') +
       `ORIGINAL QUESTION:\n${question}\n\n` +
-      `INDEPENDENT ANSWERS FROM YOUR FELLOW ADVISORS (sealed-bid, no advisor saw any other answer before responding):\n\n${compiled}\n\n` +
+      `INDEPENDENT ANSWERS FROM YOUR FELLOW ADVISORS (sealed-bid, no advisor saw any other answer before responding):\n${QUOTED_NOTE}\n\n${compiled}\n\n` +
       `Where do you disagree, and why? Stay in your role.`;
 
     const round2Seats = buildSeats(configs, ROUND2_BASE);
@@ -112,7 +114,7 @@ export async function runBoardroom(
 function formatPanelForReview(answers: PanelistAnswer[]): string {
   return answers
     .filter(a => !a.error && a.text.length > 0)
-    .map(a => `### ${a.role} (${a.panelist})\n${a.text}`)
+    .map(a => `### ${a.role} (${a.panelist})\n${quoteUntrusted(a.text, MAX_ANSWER_CHARS)}`)
     .join('\n\n');
 }
 

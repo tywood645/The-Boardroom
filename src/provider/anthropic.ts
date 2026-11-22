@@ -1,4 +1,4 @@
-import { LLMProvider } from './base.js';
+import { LLMProvider, assertSseBufferBounded, readTextCapped } from './base.js';
 import type { MessageCreateParams, StreamEvent } from './types.js';
 import { ProviderError } from '../util/error.js';
 import { linkAbort, isDeadlineAbort } from '../util/abort.js';
@@ -63,6 +63,9 @@ export class AnthropicProvider extends LLMProvider {
     // Set once a response is accepted and its body opened, per attempt.
     let streamStarted = false;
     let unlink: () => void = () => {};
+    // The body reader of the attempt in progress, so it can be cancelled when
+    // the consumer stops early (an error, a deadline, an oversized response).
+    let activeReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       streamStarted = false;
@@ -81,10 +84,13 @@ export class AnthropicProvider extends LLMProvider {
           },
           body: JSON.stringify(body),
           signal: controller.signal,
+          // A vendor API has no business redirecting a POST that carries the
+          // prompt and the key. Fail rather than follow it somewhere else.
+          redirect: 'error',
         }).finally(() => clearTimeout(connectTimer));
 
         if (!response.ok) {
-          const errBody = await response.text();
+          const errBody = await readTextCapped(response);
           if (response.status === 429 || response.status >= 500) {
             const delay = Math.pow(2, attempt) * 1000;
             logger.warn('API ' + response.status + ', retrying in ' + delay + 'ms...');
@@ -98,6 +104,7 @@ export class AnthropicProvider extends LLMProvider {
         const reader = response.body?.getReader();
         if (!reader) throw new ProviderError('No response body');
         streamStarted = true;
+        activeReader = reader;
 
         const decoder = new TextDecoder();
         let buffer = '';
@@ -109,6 +116,7 @@ export class AnthropicProvider extends LLMProvider {
           buffer += decoder.decode(value, { stream: true });
           const chunks = buffer.split('\n\n');
           buffer = chunks.pop()!;
+          assertSseBufferBounded(buffer, 'anthropic');
 
           for (const chunk of chunks) {
             for (const ev of parseAnthropicChunk(chunk)) {
@@ -140,6 +148,8 @@ export class AnthropicProvider extends LLMProvider {
       } finally {
         unlink();
         unlink = () => {};
+        activeReader?.cancel().catch(() => {});
+        activeReader = undefined;
       }
     }
 

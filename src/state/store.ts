@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { boardroomDir } from '../util/paths.js';
 import type { MotionResult, FinalVote } from '../motion/types.js';
 import { logger } from '../util/logger.js';
 import { sanitizeForRecall } from '../util/sanitize.js';
@@ -45,11 +45,7 @@ const DEFAULT_CONTEXT_TEMPLATE = `# Standing Board Context
 (decisions you've already made and don't want to keep debating)
 `;
 
-export function boardroomDir(): string {
-  const dir = join(homedir(), '.boardroom');
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
-}
+export { boardroomDir };
 
 export function contextPath(): string {
   return join(boardroomDir(), 'context.md');

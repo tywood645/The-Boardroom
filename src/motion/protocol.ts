@@ -4,8 +4,10 @@ import { createProvider } from '../provider/factory.js';
 import { collectStream } from '../provider/collect.js';
 import type { RunContext } from '../provider/collect.js';
 import { roleForVendor } from '../boardroom/roles.js';
-import { consultBriefing } from '../boardroom/consultant.js';
+import { consultBriefing, briefingBlock } from '../boardroom/consultant.js';
+import { quoteUntrusted, QUOTED_NOTE } from '../util/sanitize.js';
 import type { ConsultantBriefing } from '../boardroom/consultant.js';
+import { parseChoice, parseLine } from '../util/fields.js';
 import type {
   SecondVote,
   DebateSpeech,
@@ -24,9 +26,7 @@ export interface MotionOptions {
 
 /** Every phase prefixes the same briefing block. */
 function briefingBlockOf(briefing: ConsultantBriefing | null): string {
-  return briefing
-    ? `CONSULTANT BRIEFING (current research):\n${briefing.text}\n\n--- end briefing ---\n\n`
-    : '';
+  return briefingBlock(briefing, 'CONSULTANT BRIEFING (current research):');
 }
 
 /** Every advisor gets the same role preamble in every phase. */
@@ -63,20 +63,34 @@ export async function runMotion(
   const seconds = await runSecondPhase(configs, motion, briefing, maxTokens, recall, opts.ctx);
   const validSeconds = seconds.filter(s => !s.error && s.seconded).length;
 
-  if (validSeconds < SECOND_THRESHOLD) {
-    return {
-      id,
-      motion,
-      mover: 'the founder',
-      startedAt,
-      briefing,
-      seconds,
-      debate: [],
-      votes: [],
-      tally: { aye: 0, nay: 0, abstain: 0 },
-      outcome: 'died_for_lack_of_second',
-    };
+  // A motion is decided by the board, not by whichever seats happened to
+  // answer. An advisor whose call failed (vendor error, budget block,
+  // deadline) is absent, and without a majority of the seated board present
+  // there is no decision to record: not "died", not "passed 1-0".
+  const seated = configs.length;
+  const quorumNeeded = Math.floor(seated / 2) + 1;
+  const stopped = (
+    outcome: MotionResult['outcome'],
+    quorum?: MotionResult['quorum'],
+  ): MotionResult => ({
+    id,
+    motion,
+    mover: 'the founder',
+    startedAt,
+    briefing,
+    seconds,
+    debate: [],
+    votes: [],
+    tally: { aye: 0, nay: 0, abstain: 0 },
+    outcome,
+    ...(quorum ? { quorum } : {}),
+  });
+
+  const presentForSecond = seconds.filter(s => !s.error).length;
+  if (presentForSecond < quorumNeeded) {
+    return stopped('no_quorum', { phase: 'second', present: presentForSecond, needed: quorumNeeded, seated });
   }
+  if (validSeconds < SECOND_THRESHOLD) return stopped('died_for_lack_of_second');
 
   // Phase 3: DEBATE
   const debate = await runDebatePhase(configs, motion, briefing, seconds, maxTokens, recall, opts.ctx);
@@ -90,8 +104,10 @@ export async function runMotion(
     nay: votes.filter(v => !v.error && v.vote === 'NAY').length,
     abstain: votes.filter(v => !v.error && v.vote === 'ABSTAIN').length,
   };
+  const presentForVote = votes.filter(v => !v.error).length;
   let outcome: MotionResult['outcome'];
-  if (tally.aye > tally.nay) outcome = 'passed';
+  if (presentForVote < quorumNeeded) outcome = 'no_quorum';
+  else if (tally.aye > tally.nay) outcome = 'passed';
   else if (tally.nay > tally.aye) outcome = 'failed';
   else outcome = 'tied';
 
@@ -106,6 +122,9 @@ export async function runMotion(
     votes,
     tally,
     outcome,
+    ...(outcome === 'no_quorum'
+      ? { quorum: { phase: 'vote' as const, present: presentForVote, needed: quorumNeeded, seated } }
+      : {}),
   };
 }
 
@@ -167,18 +186,18 @@ async function runSecondPhase(
 /** The format asks for one sentence; anything past the first line or this length is not a reason. */
 const MAX_REASON_CHARS = 300;
 
-/** First line after "REASON:", bounded. Never multi-line, so it cannot carry a payload past itself. */
+/** The REASON line, bounded. Never multi-line, so it cannot carry a payload past itself. */
 function parseReason(cleaned: string): string {
-  const m = cleaned.match(/REASON:[ \t]*([^\n]*)/i);
-  const reason = m && m[1].trim() ? m[1].trim() : cleaned.split('\n')[0].trim();
-  return reason.slice(0, MAX_REASON_CHARS);
+  return parseLine(cleaned, 'REASON', MAX_REASON_CHARS) ?? cleaned.split('\n')[0].trim().slice(0, MAX_REASON_CHARS);
 }
 
-function parseSecond(text: string): { seconded: boolean; reason: string } {
+// Each parser below reads its field with parseChoice (util/fields.ts): the
+// field must start a line, must not be the format line echoed back, and must
+// not contradict itself. Anything else falls to the safe default.
+
+export function parseSecond(text: string): { seconded: boolean; reason: string } {
   const cleaned = text.trim();
-  const secondMatch = cleaned.match(/SECOND:\s*(yes|no)/i);
-  const seconded = secondMatch ? secondMatch[1].toLowerCase() === 'yes' : false;
-  return { seconded, reason: parseReason(cleaned) };
+  return { seconded: parseChoice(cleaned, 'SECOND', ['yes', 'no']) === 'yes', reason: parseReason(cleaned) };
 }
 
 function makeErrorSecond(cfg: ProviderConfig, error: string): SecondVote {
@@ -250,13 +269,18 @@ async function runDebatePhase(
   );
 }
 
-function parseDebate(text: string): { stance: Stance; case: string } {
+/** The format asks for 150 words; this is several times that. */
+const MAX_CASE_CHARS = 2000;
+
+export function parseDebate(text: string): { stance: Stance; case: string } {
   const cleaned = text.trim();
-  const stanceMatch = cleaned.match(/STANCE:\s*(SUPPORT|OPPOSE|UNDECIDED)/i);
-  const caseMatch = cleaned.match(/CASE:\s*([\s\S]+)$/i);
-  const stance = (stanceMatch ? stanceMatch[1].toUpperCase() : 'UNDECIDED') as Stance;
-  const caseText = caseMatch ? caseMatch[1].trim() : cleaned;
-  return { stance, case: caseText };
+  const stance: Stance = parseChoice(cleaned, 'STANCE', ['SUPPORT', 'OPPOSE', 'UNDECIDED']) ?? 'UNDECIDED';
+  // Everything after the last line-leading "CASE:"; the last, so an echoed
+  // format line is not taken for the argument.
+  const starts = [...cleaned.matchAll(/^[ \t>*#_\-]*CASE\**[ \t]*:\**[ \t]*/gim)];
+  const last = starts[starts.length - 1];
+  const caseText = last ? cleaned.slice(last.index! + last[0].length).trim() : cleaned;
+  return { stance, case: caseText.slice(0, MAX_CASE_CHARS) };
 }
 
 function makeErrorDebate(cfg: ProviderConfig, error: string): DebateSpeech {
@@ -293,7 +317,7 @@ async function runVotePhase(
 
   const debateBlock = debate
     .filter(d => !d.error && d.case)
-    .map(d => `### ${d.role} (${d.panelist}): ${d.stance}\n${d.case}`)
+    .map(d => `### ${d.role} (${d.panelist}): ${d.stance}\n${quoteUntrusted(d.case, MAX_CASE_CHARS)}`)
     .join('\n\n');
 
   return Promise.all(
@@ -308,7 +332,7 @@ async function runVotePhase(
         recallBlock +
         briefingBlock +
         `MOTION BEFORE THE BOARD:\n"${motion}"\n\n` +
-        `DEBATE TRANSCRIPT (all advisors, including your own ${myStance} stance):\n\n${debateBlock}\n\n` +
+        `DEBATE TRANSCRIPT (all advisors, including your own ${myStance} stance):\n${QUOTED_NOTE}\n\n${debateBlock}\n\n` +
         `This is the FINAL VOTE. Cast your ballot AS THE ${role.name}. You may flip your stance from the debate if other advisors' arguments have persuaded you, that is the entire point of debate. If you flip, say so explicitly.\n\n` +
         `Reply in this EXACT format (no markdown, no preamble):\n` +
         `VOTE: AYE | NAY | ABSTAIN\n` +
@@ -337,10 +361,9 @@ async function runVotePhase(
   );
 }
 
-function parseVote(text: string): { vote: Vote; reason: string } {
+export function parseVote(text: string): { vote: Vote; reason: string } {
   const cleaned = text.trim();
-  const voteMatch = cleaned.match(/VOTE:\s*(AYE|NAY|ABSTAIN)/i);
-  const vote = (voteMatch ? voteMatch[1].toUpperCase() : 'ABSTAIN') as Vote;
+  const vote: Vote = parseChoice(cleaned, 'VOTE', ['AYE', 'NAY', 'ABSTAIN']) ?? 'ABSTAIN';
   return { vote, reason: parseReason(cleaned) };
 }
 

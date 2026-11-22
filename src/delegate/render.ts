@@ -22,6 +22,13 @@ export function renderDelegation(r: DelegateResult, explain: boolean): void {
   }
 
   console.log(r.answer || chalk.dim('(no answer produced)'));
+  if (r.answer && r.answerOutcome === 'refuted') {
+    console.log(
+      chalk.bold.red(
+        '\nWARNING: the answer above was REFUTED by the checker, and no better attempt completed. Do not rely on it.',
+      ),
+    );
+  }
   console.log();
 
   for (const [i, a] of r.attempts.entries()) {

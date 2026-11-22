@@ -62,6 +62,7 @@ function outcomeLabel(outcome: string): string {
     case 'failed': return 'FAILED';
     case 'tied': return 'TIED';
     case 'died_for_lack_of_second': return 'DIED (no second)';
+    case 'no_quorum': return 'NO QUORUM (not decided)';
     default: return sanitizeForRecall(outcome, 30).toUpperCase();
   }
 }

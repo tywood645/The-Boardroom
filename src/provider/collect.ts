@@ -51,6 +51,9 @@ export interface RunContext {
 /** No single call reports more than this; a larger count is not believed. */
 export const MAX_PLAUSIBLE_TOKENS = 10_000_000;
 
+/** Generous ceiling on output bytes per token; typical text is about 4. See maxTextBytes. */
+export const MAX_BYTES_PER_TOKEN = 64;
+
 /** Role markers, separators and similar framing each message costs on top of its text. */
 const PER_MESSAGE_OVERHEAD = 16;
 
@@ -169,6 +172,11 @@ async function dispatch(
   let reportedOut: number | null = null;
   let sawContent = false;
   let abandoned = 0;
+  let textBytes = 0;
+  let overflowed = false;
+  // No tokenizer averages anywhere near this many bytes per token, so text
+  // past this was not produced within max_tokens: the vendor is ignoring it.
+  const maxTextBytes = params.maxTokens * MAX_BYTES_PER_TOKEN + 4096;
 
   /** What this call is charged: authoritative counts where valid, upper bounds where not. */
   const tally = () => {
@@ -177,7 +185,11 @@ async function dispatch(
     const thisAttemptIn = reportedIn ?? estIn;
     // Each abandoned attempt sent the same prompt; the vendor may have billed it.
     const inputTokens = thisAttemptIn + abandoned * estIn;
-    const outputTokens = reportedOut ?? Math.min(params.maxTokens, upperBoundTokens(text));
+    // With no reported count, charge the text's upper bound. It is capped at
+    // maxTokens because the vendor enforces that limit, unless this very
+    // response proved it does not, in which case there is no cap to trust.
+    const bound = upperBoundTokens(text);
+    const outputTokens = reportedOut ?? (overflowed ? bound : Math.min(params.maxTokens, bound));
     return { inputTokens, outputTokens, estimatedInput, estimatedOutput };
   };
 
@@ -201,7 +213,18 @@ async function dispatch(
           if (ev.delta.type === 'text_delta') {
             if (ttfbMs === 0) ttfbMs = Date.now() - start;
             sawContent = true;
-            text += ev.delta.text;
+            const piece = typeof ev.delta.text === 'string' ? ev.delta.text : String(ev.delta.text ?? '');
+            text += piece;
+            textBytes += Buffer.byteLength(piece, 'utf-8');
+            if (textBytes > maxTextBytes) {
+              // Stop reading: an unbounded stream is unbounded memory here and
+              // unbounded spend there. Leaving the loop cancels the transfer.
+              overflowed = true;
+              throw new ProviderError(
+                `${provider.name}/${model} sent over ${maxTextBytes} bytes for max_tokens=${params.maxTokens}; ` +
+                  `it is not honouring the output limit, so the stream was cut off`,
+              );
+            }
           }
           break;
         case 'message_delta': {

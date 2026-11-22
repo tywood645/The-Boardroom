@@ -1,12 +1,10 @@
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { boardroomSubdir } from '../util/paths.js';
 import type { MotionResult } from './types.js';
 
 export function meetingsDir(): string {
-  const dir = join(homedir(), '.boardroom', 'meetings');
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
+  return boardroomSubdir('meetings');
 }
 
 /**
@@ -75,6 +73,13 @@ function renderMinutes(r: MotionResult): string {
     lines.push('');
     return lines.join('\n');
   }
+  if (r.outcome === 'no_quorum' && r.quorum?.phase === 'second') {
+    lines.push(`## Result`);
+    lines.push('');
+    lines.push(`${quorumStatement(r)} No debate or vote held.`);
+    lines.push('');
+    return lines.join('\n');
+  }
 
   lines.push(`## Debate`);
   lines.push('');
@@ -135,7 +140,19 @@ function outcomeLabel(outcome: MotionResult['outcome']): string {
     case 'failed': return 'FAILED';
     case 'tied': return 'TIED: chair (founder) must break';
     case 'died_for_lack_of_second': return 'DIED FOR LACK OF SECOND';
+    case 'no_quorum': return 'NO QUORUM: nothing decided';
   }
+}
+
+/** One sentence on why there was no quorum. Shared by the minutes and the terminal render. */
+export function quorumStatement(r: MotionResult): string {
+  const q = r.quorum;
+  if (!q) return 'No quorum: too few advisors answered, so nothing was decided.';
+  const what = q.phase === 'second' ? 'the call for a second' : 'the final vote';
+  return (
+    `No quorum: ${q.present} of ${q.seated} advisors answered ${what} and ${q.needed} are needed. ` +
+    `Nothing was decided and nothing was recorded as a decision.`
+  );
 }
 
 function outcomeStatement(r: MotionResult): string {
@@ -148,5 +165,7 @@ function outcomeStatement(r: MotionResult): string {
       return `The motion is **TIED** ${r.tally.aye}-${r.tally.nay}. The chair (founder) must cast the deciding vote.`;
     case 'died_for_lack_of_second':
       return `The motion died for lack of a second.`;
+    case 'no_quorum':
+      return quorumStatement(r);
   }
 }
